@@ -29,6 +29,7 @@ jobs:
         echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
         export PATH="/home/runner/yandex-cloud/bin:$PATH"
         
+        # Install jq for JSON processing
         sudo apt-get update
         sudo apt-get install -y jq
         
@@ -68,18 +69,26 @@ jobs:
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
         echo "Checking if registry 'rsoi-registry' exists in folder $FOLDER_ID..."
         
-        yc container registry list --folder-id $FOLDER_ID
+        echo "Listing all registries in folder..."
+        REGISTRY_LIST=$(yc container registry list --folder-id $FOLDER_ID --format json)
+        echo "Available registries:"
+        echo "$REGISTRY_LIST" | jq .
         
-        REGISTRY_INFO=$(yc container registry get rsoi-registry --folder-id $FOLDER_ID --format json 2>/dev/null || echo "{}")
-        REGISTRY_ID=$(echo "$REGISTRY_INFO" | jq -r '.id' || echo "")
+        REGISTRY_EXISTS=$(echo "$REGISTRY_LIST" | jq -r '.[] | select(.name == "rsoi-registry") | .id' || echo "")
         
-        if [ -z "$REGISTRY_ID" ] || [ "$REGISTRY_ID" = "null" ] || [ "$REGISTRY_ID" = "" ]; then
+        if [ -z "$REGISTRY_EXISTS" ]; then
           echo "Registry 'rsoi-registry' not found. Creating it now..."
           yc container registry create --name rsoi-registry --folder-id $FOLDER_ID
           echo "Registry created successfully"
+          
+          echo "Verifying registry creation..."
+          yc container registry list --folder-id $FOLDER_ID
         else
-          echo "Registry 'rsoi-registry' found with ID: $REGISTRY_ID"
+          echo "Registry 'rsoi-registry' found with ID: $REGISTRY_EXISTS"
         fi
+        
+        echo "Checking access permissions for registry..."
+        yc container registry list-access-bindings rsoi-registry --folder-id $FOLDER_ID || echo "Could not check permissions, but continuing"
 
     - name: Get cluster credentials
       run: |
@@ -109,28 +118,39 @@ jobs:
         
         echo "Registry URL: $REGISTRY_URL"
         echo "Folder ID: $FOLDER_ID"
+        echo "Full registry path: cr.yandex/$FOLDER_ID/rsoi-registry"
         
         echo "Testing registry access with hello-world..."
         docker pull hello-world:latest
-        docker tag hello-world:latest $REGISTRY_URL/test:latest
-        docker push $REGISTRY_URL/test:latest
-        docker rmi $REGISTRY_URL/test:latest || true
+        
+        # Tag with full registry path
+        docker tag hello-world:latest cr.yandex/$FOLDER_ID/rsoi-registry/test:latest
+        
+        echo "Pushing test image to registry..."
+        docker push cr.yandex/$FOLDER_ID/rsoi-registry/test:latest || {
+          echo "Failed to push test image. Checking registry status..."
+          yc container registry list --folder-id $FOLDER_ID
+          yc container registry get rsoi-registry --folder-id $FOLDER_ID || echo "Registry not found or inaccessible"
+          exit 1
+        }
+        
+        docker rmi cr.yandex/$FOLDER_ID/rsoi-registry/test:latest || true
         
         echo "Building and pushing gateway service"
-        docker build -t $REGISTRY_URL/gateway:latest ./src/gateway
-        docker push $REGISTRY_URL/gateway:latest
+        docker build -t cr.yandex/$FOLDER_ID/rsoi-registry/gateway:latest ./src/gateway
+        docker push cr.yandex/$FOLDER_ID/rsoi-registry/gateway:latest
 
         echo "Building and pushing payment-service"
-        docker build -t $REGISTRY_URL/payment-service:latest ./src/payment-service
-        docker push $REGISTRY_URL/payment-service:latest
+        docker build -t cr.yandex/$FOLDER_ID/rsoi-registry/payment-service:latest ./src/payment-service
+        docker push cr.yandex/$FOLDER_ID/rsoi-registry/payment-service:latest
 
         echo "Building and pushing rental-service"
-        docker build -t $REGISTRY_URL/rental-service:latest ./src/rental-service
-        docker push $REGISTRY_URL/rental-service:latest
+        docker build -t cr.yandex/$FOLDER_ID/rsoi-registry/rental-service:latest ./src/rental-service
+        docker push cr.yandex/$FOLDER_ID/rsoi-registry/rental-service:latest
 
         echo "Building and pushing cars-service"
-        docker build -t $REGISTRY_URL/cars-service:latest ./src/cars-service
-        docker push $REGISTRY_URL/cars-service:latest
+        docker build -t cr.yandex/$FOLDER_ID/rsoi-registry/cars-service:latest ./src/cars-service
+        docker push cr.yandex/$FOLDER_ID/rsoi-registry/cars-service:latest
 
     - name: Create database initialization resources
       run: |
@@ -171,7 +191,6 @@ jobs:
     - name: Deploy services
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
-        # Get external IP with retry logic
         for i in {1..10}; do
           EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
           if [ ! -z "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "<none>" ] && [ "$EXTERNAL_IP" != "null" ]; then
@@ -265,7 +284,6 @@ jobs:
         timeout=300
         step=10
         
-        # Wait for gateway
         echo "Waiting for gateway pod..."
         for i in $(seq 1 $((timeout/step))); do
           if kubectl get pod -n rsoi -l app=gateway -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
@@ -276,7 +294,6 @@ jobs:
           sleep $step
         done
         
-        # Wait for payment-service
         echo "Waiting for payment-service pod..."
         for i in $(seq 1 $((timeout/step))); do
           if kubectl get pod -n rsoi -l app=payment-service -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
@@ -287,7 +304,6 @@ jobs:
           sleep $step
         done
         
-        # Wait for rental-service
         echo "Waiting for rental-service pod..."
         for i in $(seq 1 $((timeout/step))); do
           if kubectl get pod -n rsoi -l app=rental-service -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
