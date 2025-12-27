@@ -55,75 +55,47 @@ jobs:
         echo "Registry ID: $REGISTRY_ID"
         echo "registry_id=$REGISTRY_ID" >> $GITHUB_OUTPUT
 
+    - name: Prepare docker-compose.yml
+      run: |
+        FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
+        sed -i "s|<folder-id>|${FOLDER_ID}|g" docker-compose.yml
+        cat docker-compose.yml
+
+    - name: Build and push Docker images
+      run: |
+        docker compose build --push
+      env:
+        DOCKER_BUILDKIT: 1
+        COMPOSE_DOCKER_CLI_BUILD: 1
+
     - name: Get cluster credentials
       run: |
         CLUSTER_NAME="rsoi-lab4-cluster"
         echo "Getting credentials for cluster: $CLUSTER_NAME"
-        CLUSTER_INFO=$(yc managed-kubernetes cluster list --folder-id ${{ secrets.YC_FOLDER_ID }} --format json | jq -r '.[] | select(.name == "'$CLUSTER_NAME'")')
-        if [ -z "$CLUSTER_INFO" ] || [ "$CLUSTER_INFO" == "null" ]; then
-          echo "Cluster $CLUSTER_NAME not found. Please create it first."
-          exit 1
-        fi
         yc managed-kubernetes cluster get-credentials $CLUSTER_NAME --external --force
         kubectl config use-context yc-$CLUSTER_NAME
         kubectl cluster-info
 
-    - name: Set up Helm
-      uses: azure/setup-helm@v4
-      with:
-        version: 'v3.12.0'
-
-    - name: Add Helm repositories
+    - name: Create namespace
       run: |
-        helm repo add bitnami https://charts.bitnami.com/bitnami
-        helm repo update
+        kubectl create namespace test --dry-run=client -o yaml | kubectl apply -f -
 
-    - name: Validate Helm charts
+    - name: Create database secrets and config
       run: |
-        echo "Validating Helm chart syntax..."
-        helm lint charts/common || {
-          echo "Helm chart validation failed. Check YAML syntax in charts/common/templates/"
-          exit 1
-        }
-
-    - name: Build and push Docker images
-      run: |
-        REGISTRY_ID=${{ steps.verify-registry.outputs.registry_id }}
-        echo "Using registry ID: $REGISTRY_ID"
-        docker pull hello-world:latest
-        docker tag hello-world:latest cr.yandex/$REGISTRY_ID/test:latest
-        docker push cr.yandex/$REGISTRY_ID/test:latest
-        docker rmi cr.yandex/$REGISTRY_ID/test:latest || true
-        
-        docker build -t cr.yandex/$REGISTRY_ID/gateway:latest ./src/gateway
-        docker push cr.yandex/$REGISTRY_ID/gateway:latest
-        
-        docker build -t cr.yandex/$REGISTRY_ID/payment-service:latest ./src/payment-service
-        docker push cr.yandex/$REGISTRY_ID/payment-service:latest
-        
-        docker build -t cr.yandex/$REGISTRY_ID/rental-service:latest ./src/rental-service
-        docker push cr.yandex/$REGISTRY_ID/rental-service:latest
-        
-        docker build -t cr.yandex/$REGISTRY_ID/cars-service:latest ./src/cars-service
-        docker push cr.yandex/$REGISTRY_ID/cars-service:latest
-
-    - name: Create database initialization resources
-      run: |
-        kubectl create namespace rsoi --dry-run=client -o yaml | kubectl apply -f -
         kubectl create secret generic postgres-secrets \
           --from-literal=postgres-password=postgres \
           --from-literal=program-password=test \
-          --namespace rsoi \
+          --namespace test \
           --dry-run=client -o yaml | kubectl apply -f -
         kubectl create configmap postgres-init-scripts \
           --from-file=./src/schema-3.sql \
-          --namespace rsoi \
+          --namespace test \
           --dry-run=client -o yaml | kubectl apply -f -
 
     - name: Deploy database
       run: |
         helm upgrade --install postgres bitnami/postgresql \
-          --namespace rsoi \
+          --namespace test \
           --set auth.username=postgres \
           --set auth.password=postgres \
           --set auth.database=postgres \
@@ -135,7 +107,7 @@ jobs:
 
     - name: Wait for database to be ready
       run: |
-        kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=postgres -n rsoi --timeout=300s
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=postgres -n test --timeout=300s
 
     - name: Deploy services
       run: |
@@ -149,9 +121,8 @@ jobs:
         done
         EXTERNAL_IP=${EXTERNAL_IP:-127.0.0.1}
         
-        echo "Deploying gateway service..."
         helm upgrade --install gateway charts/common \
-          --namespace rsoi \
+          --namespace test \
           --set service.name=gateway \
           --set service.image.repository=cr.yandex/$REGISTRY_ID/gateway \
           --set service.image.tag=latest \
@@ -159,17 +130,16 @@ jobs:
           --set service.ports.servicePort=80 \
           --set ingress.host=gateway.${EXTERNAL_IP}.nip.io \
           --set service.env[0].name=CAR_SERVICE_URL \
-          --set service.env[0].value=http://cars-service-service.rsoi.svc.cluster.local:80 \
+          --set service.env[0].value=http://cars-service-service.test.svc.cluster.local:80 \
           --set service.env[1].name=RENTAL_SERVICE_URL \
-          --set service.env[1].value=http://rental-service-service.rsoi.svc.cluster.local:80 \
+          --set service.env[1].value=http://rental-service-service.test.svc.cluster.local:80 \
           --set service.env[2].name=PAYMENT_SERVICE_URL \
-          --set service.env[2].value=http://payment-service-service.rsoi.svc.cluster.local:80 \
+          --set service.env[2].value=http://payment-service-service.test.svc.cluster.local:80 \
           --set service.env[3].name=PORT \
           --set service.env[3].value=8080
         
-        echo "Deploying payment service..."
         helm upgrade --install payment-service charts/common \
-          --namespace rsoi \
+          --namespace test \
           --set service.name=payment-service \
           --set service.image.repository=cr.yandex/$REGISTRY_ID/payment-service \
           --set service.image.tag=latest \
@@ -177,13 +147,12 @@ jobs:
           --set service.ports.servicePort=80 \
           --set ingress.host=payment.${EXTERNAL_IP}.nip.io \
           --set service.env[0].name=DATABASE_URL \
-          --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/payments \
+          --set service.env[0].value=postgresql://program:test@postgres-postgresql.test.svc.cluster.local:5432/payments \
           --set service.env[1].name=PORT \
           --set service.env[1].value=8050
         
-        echo "Deploying rental service..."
         helm upgrade --install rental-service charts/common \
-          --namespace rsoi \
+          --namespace test \
           --set service.name=rental-service \
           --set service.image.repository=cr.yandex/$REGISTRY_ID/rental-service \
           --set service.image.tag=latest \
@@ -191,17 +160,16 @@ jobs:
           --set service.ports.servicePort=80 \
           --set ingress.host=rental.${EXTERNAL_IP}.nip.io \
           --set service.env[0].name=DATABASE_URL \
-          --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/rentals \
+          --set service.env[0].value=postgresql://program:test@postgres-postgresql.test.svc.cluster.local:5432/rentals \
           --set service.env[1].name=CAR_SERVICE_URL \
-          --set service.env[1].value=http://cars-service-service.rsoi.svc.cluster.local:80 \
+          --set service.env[1].value=http://cars-service-service.test.svc.cluster.local:80 \
           --set service.env[2].name=PAYMENT_SERVICE_URL \
-          --set service.env[2].value=http://payment-service-service.rsoi.svc.cluster.local:80 \
+          --set service.env[2].value=http://payment-service-service.test.svc.cluster.local:80 \
           --set service.env[3].name=PORT \
           --set service.env[3].value=8060
         
-        echo "Deploying cars service..."
         helm upgrade --install cars-service charts/common \
-          --namespace rsoi \
+          --namespace test \
           --set service.name=cars-service \
           --set service.image.repository=cr.yandex/$REGISTRY_ID/cars-service \
           --set service.image.tag=latest \
@@ -209,31 +177,16 @@ jobs:
           --set service.ports.servicePort=80 \
           --set ingress.host=cars.${EXTERNAL_IP}.nip.io \
           --set service.env[0].name=DATABASE_URL \
-          --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/cars \
+          --set service.env[0].value=postgresql://program:test@postgres-postgresql.test.svc.cluster.local:5432/cars \
           --set service.env[1].name=PORT \
           --set service.env[1].value=8070
 
-    - name: Verify deployment
+    - name: Wait before services are ready
       run: |
-        kubectl get pods -n rsoi -o wide
-        kubectl get svc -n rsoi
-        kubectl get ingress -n rsoi
-        
-        EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1")
-        GATEWAY_URL="http://gateway.${EXTERNAL_IP}.nip.io"
-        PAYMENT_URL="http://payment.${EXTERNAL_IP}.nip.io"
-        RENTAL_URL="http://rental.${EXTERNAL_IP}.nip.io"
-        CARS_URL="http://cars.${EXTERNAL_IP}.nip.io"
-        
-        echo "Testing service endpoints:"
-        echo "Gateway: $GATEWAY_URL/health"
-        curl -sSf $GATEWAY_URL/health || echo "Gateway health check failed"
-        echo "Payment: $PAYMENT_URL/health"
-        curl -sSf $PAYMENT_URL/health || echo "Payment health check failed"
-        echo "Rental: $RENTAL_URL/health"
-        curl -sSf $RENTAL_URL/health || echo "Rental health check failed"
-        echo "Cars: $CARS_URL/health"
-        curl -sSf $CARS_URL/health || echo "Cars health check failed"
+        kubectl wait -n test -l app=gateway pod --for=condition=Ready --timeout=3m
+        kubectl wait -n test -l app=payment-service pod --for=condition=Ready --timeout=3m
+        kubectl wait -n test -l app=rental-service pod --for=condition=Ready --timeout=3m
+        kubectl wait -n test -l app=cars-service pod --for=condition=Ready --timeout=3m
 
     - name: Autograding
       uses: education/autograding@v1
