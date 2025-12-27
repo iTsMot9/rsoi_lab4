@@ -31,7 +31,7 @@ jobs:
       uses: nightstory/setup-yc@v1
       with:
         yc_version: 'latest'
-        yc_token: ${{ secrets.YC_OAUTH_TOKEN }}
+        service_account_key: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
 
     - name: Get cluster credentials
       run: |
