@@ -36,38 +36,39 @@ jobs:
         yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
         yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
         yc config list
-        yc resource-manager cloud list
-        yc resource-manager folder list
-      env:
-        YC_SERVICE_ACCOUNT_KEY: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
-        YC_CLOUD_ID: ${{ secrets.YC_CLOUD_ID }}
-        YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
 
     - name: Login to Yandex Container Registry
       run: |
         yc container registry configure-docker --folder-id ${{ secrets.YC_FOLDER_ID }}
 
     - name: Verify Container Registry exists
+      id: verify-registry
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
         echo "Checking if registry 'rsoi-registry' exists in folder $FOLDER_ID..."
         REGISTRY_LIST=$(yc container registry list --folder-id $FOLDER_ID --format json)
         echo "Available registries:"
         echo "$REGISTRY_LIST" | jq .
-        REGISTRY_EXISTS=$(echo "$REGISTRY_LIST" | jq -r '.[] | select(.name == "rsoi-registry") | .id' || echo "")
-        if [ -z "$REGISTRY_EXISTS" ]; then
+        REGISTRY_INFO=$(echo "$REGISTRY_LIST" | jq -r '.[] | select(.name == "rsoi-registry")')
+        if [ -z "$REGISTRY_INFO" ]; then
           echo "Registry 'rsoi-registry' not found. Creating it now..."
           yc container registry create --name rsoi-registry --folder-id $FOLDER_ID
           echo "Registry created successfully"
-          yc container registry list --folder-id $FOLDER_ID
-        else
-          echo "Registry 'rsoi-registry' found with ID: $REGISTRY_EXISTS"
+          REGISTRY_INFO=$(yc container registry list --folder-id $FOLDER_ID --format json | jq -r '.[] | select(.name == "rsoi-registry")')
         fi
-        yc container registry list-access-bindings rsoi-registry --folder-id $FOLDER_ID || echo "Could not check permissions, but continuing"
+        REGISTRY_ID=$(echo "$REGISTRY_INFO" | jq -r '.id')
+        echo "Registry ID: $REGISTRY_ID"
+        echo "registry_id=$REGISTRY_ID" >> $GITHUB_OUTPUT
+        yc container registry list-access-bindings $REGISTRY_ID --folder-id $FOLDER_ID
 
     - name: Get cluster credentials
       run: |
         echo "Getting credentials for cluster: rsoi-lab4-cluster"
+        CLUSTER_EXISTS=$(yc managed-kubernetes cluster list --folder-id ${{ secrets.YC_FOLDER_ID }} --format json | jq -r '.[] | select(.name == "rsoi-lab4-cluster") | .id')
+        if [ -z "$CLUSTER_EXISTS" ]; then
+          echo "Cluster rsoi-lab4-cluster not found. Please create it first."
+          exit 1
+        fi
         yc managed-kubernetes cluster get-credentials rsoi-lab4-cluster --external --force
         echo "Current kubeconfig contexts:"
         kubectl config get-contexts
@@ -75,6 +76,7 @@ jobs:
         kubectl config use-context yc-rsoi-lab4-cluster
         echo "Verifying cluster access:"
         kubectl cluster-info
+        kubectl get nodes
 
     - name: Set up Helm
       uses: azure/setup-helm@v4
@@ -83,39 +85,39 @@ jobs:
 
     - name: Add Helm repositories
       run: |
-        helm repo add bitnami https://charts.bitnami.com/bitnami
+        helm repo add bitnami https://charts.bitnami.com/bitnami  
         helm repo update
 
     - name: Build and push Docker images
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
-        REGISTRY_NAME="rsoi-registry"
-        echo "Registry URL: cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}"
+        REGISTRY_ID=${{ steps.verify-registry.outputs.registry_id }}
+        echo "Registry URL: cr.yandex/$REGISTRY_ID"
         echo "Folder ID: $FOLDER_ID"
-        echo "Full registry path: cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}"
+        echo "Full registry path: cr.yandex/$REGISTRY_ID"
         echo "Testing registry access with hello-world..."
         docker pull hello-world:latest
-        docker tag hello-world:latest cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/test:latest
+        docker tag hello-world:latest cr.yandex/$REGISTRY_ID/test:latest
         echo "Pushing test image to registry..."
-        docker push cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/test:latest || {
+        docker push cr.yandex/$REGISTRY_ID/test:latest || {
           echo "Failed to push test image. Checking registry status..."
           yc container registry list --folder-id $FOLDER_ID
-          yc container registry get $REGISTRY_NAME --folder-id $FOLDER_ID || echo "Registry not found or inaccessible"
+          yc container registry get $REGISTRY_ID --folder-id $FOLDER_ID
           exit 1
         }
-        docker rmi cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/test:latest || true
+        docker rmi cr.yandex/$REGISTRY_ID/test:latest || true
         echo "Building and pushing gateway service"
-        docker build -t cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/gateway:latest ./src/gateway
-        docker push cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/gateway:latest
+        docker build -t cr.yandex/$REGISTRY_ID/gateway:latest ./src/gateway
+        docker push cr.yandex/$REGISTRY_ID/gateway:latest
         echo "Building and pushing payment-service"
-        docker build -t cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/payment-service:latest ./src/payment-service
-        docker push cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/payment-service:latest
+        docker build -t cr.yandex/$REGISTRY_ID/payment-service:latest ./src/payment-service
+        docker push cr.yandex/$REGISTRY_ID/payment-service:latest
         echo "Building and pushing rental-service"
-        docker build -t cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/rental-service:latest ./src/rental-service
-        docker push cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/rental-service:latest
+        docker build -t cr.yandex/$REGISTRY_ID/rental-service:latest ./src/rental-service
+        docker push cr.yandex/$REGISTRY_ID/rental-service:latest
         echo "Building and pushing cars-service"
-        docker build -t cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/cars-service:latest ./src/cars-service
-        docker push cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/cars-service:latest
+        docker build -t cr.yandex/$REGISTRY_ID/cars-service:latest ./src/cars-service
+        docker push cr.yandex/$REGISTRY_ID/cars-service:latest
 
     - name: Create database initialization resources
       run: |
@@ -142,7 +144,6 @@ jobs:
           --set primary.initdb.scriptsConfigMap=postgres-init-scripts \
           --set primary.extraEnvVars[0].name=POSTGRESQL_INITSCRIPTS_DIR \
           --set primary.extraEnvVars[0].value=/docker-entrypoint-initdb.d
-      continue-on-error: true
 
     - name: Wait for database to be ready
       run: |
@@ -153,7 +154,7 @@ jobs:
     - name: Deploy services
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
-        REGISTRY_NAME="rsoi-registry"
+        REGISTRY_ID=${{ steps.verify-registry.outputs.registry_id }}
         for i in {1..10}; do
           EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
           if [ ! -z "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "<none>" ] && [ "$EXTERNAL_IP" != "null" ]; then
@@ -171,7 +172,7 @@ jobs:
         helm upgrade --install gateway charts/common \
           --namespace rsoi \
           --set service.name=gateway \
-          --set service.image.repository=cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/gateway \
+          --set service.image.repository=cr.yandex/$REGISTRY_ID/gateway \
           --set service.image.tag=latest \
           --set service.ports.containerPort=8080 \
           --set service.ports.servicePort=80 \
@@ -187,7 +188,7 @@ jobs:
         helm upgrade --install payment-service charts/common \
           --namespace rsoi \
           --set service.name=payment-service \
-          --set service.image.repository=cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/payment-service \
+          --set service.image.repository=cr.yandex/$REGISTRY_ID/payment-service \
           --set service.image.tag=latest \
           --set service.ports.containerPort=8050 \
           --set service.ports.servicePort=80 \
@@ -199,7 +200,7 @@ jobs:
         helm upgrade --install rental-service charts/common \
           --namespace rsoi \
           --set service.name=rental-service \
-          --set service.image.repository=cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/rental-service \
+          --set service.image.repository=cr.yandex/$REGISTRY_ID/rental-service \
           --set service.image.tag=latest \
           --set service.ports.containerPort=8060 \
           --set service.ports.servicePort=80 \
@@ -215,7 +216,7 @@ jobs:
         helm upgrade --install cars-service charts/common \
           --namespace rsoi \
           --set service.name=cars-service \
-          --set service.image.repository=cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/cars-service \
+          --set service.image.repository=cr.yandex/$REGISTRY_ID/cars-service \
           --set service.image.tag=latest \
           --set service.ports.containerPort=8070 \
           --set service.ports.servicePort=80 \
