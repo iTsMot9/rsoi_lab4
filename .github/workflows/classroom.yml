@@ -58,11 +58,9 @@ jobs:
 
     - name: Login to Yandex Container Registry
       run: |
-        IAM_TOKEN=$(yc iam create-token)
-        yc container registry login --folder-id ${{ secrets.YC_FOLDER_ID }} --docker-password "$IAM_TOKEN"
-        
-        echo "Successfully logged in to Yandex Container Registry"
-
+        yc container registry configure-docker --folder-id ${{ secrets.YC_FOLDER_ID }}
+    
+    echo "Successfully configured Docker for Yandex Container Registry"
     - name: Verify Container Registry exists
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
