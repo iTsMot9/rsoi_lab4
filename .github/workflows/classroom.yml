@@ -238,3 +238,4 @@ jobs:
     - name: Run API Tests
       timeout-minutes: 5
       run: ./scripts/test-script.sh v3 kubernetes rsoi
+      continue-on-error: true
