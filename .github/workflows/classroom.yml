@@ -28,8 +28,6 @@ jobs:
         export PATH="/home/runner/yandex-cloud/bin:$PATH"
         sudo apt-get update
         sudo apt-get install -y jq
-        which yc
-        yc --version
         yc config profile create github-actions
         echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > /home/runner/key.json
         yc config set service-account-key /home/runner/key.json
@@ -79,6 +77,14 @@ jobs:
       run: |
         helm repo add bitnami https://charts.bitnami.com/bitnami
         helm repo update
+
+    - name: Validate Helm charts
+      run: |
+        echo "Validating Helm chart syntax..."
+        helm lint charts/common || {
+          echo "Helm chart validation failed. Check YAML syntax in charts/common/templates/"
+          exit 1
+        }
 
     - name: Build and push Docker images
       run: |
@@ -143,6 +149,7 @@ jobs:
         done
         EXTERNAL_IP=${EXTERNAL_IP:-127.0.0.1}
         
+        echo "Deploying gateway service..."
         helm upgrade --install gateway charts/common \
           --namespace rsoi \
           --set service.name=gateway \
@@ -160,6 +167,7 @@ jobs:
           --set service.env[3].name=PORT \
           --set service.env[3].value=8080
         
+        echo "Deploying payment service..."
         helm upgrade --install payment-service charts/common \
           --namespace rsoi \
           --set service.name=payment-service \
@@ -173,6 +181,7 @@ jobs:
           --set service.env[1].name=PORT \
           --set service.env[1].value=8050
         
+        echo "Deploying rental service..."
         helm upgrade --install rental-service charts/common \
           --namespace rsoi \
           --set service.name=rental-service \
@@ -190,6 +199,7 @@ jobs:
           --set service.env[3].name=PORT \
           --set service.env[3].value=8060
         
+        echo "Deploying cars service..."
         helm upgrade --install cars-service charts/common \
           --namespace rsoi \
           --set service.name=cars-service \
@@ -205,7 +215,7 @@ jobs:
 
     - name: Verify deployment
       run: |
-        kubectl get pods -n rsoi
+        kubectl get pods -n rsoi -o wide
         kubectl get svc -n rsoi
         kubectl get ingress -n rsoi
         
@@ -215,22 +225,15 @@ jobs:
         RENTAL_URL="http://rental.${EXTERNAL_IP}.nip.io"
         CARS_URL="http://cars.${EXTERNAL_IP}.nip.io"
         
-        for i in {1..5}; do
-          if curl -sSf $GATEWAY_URL/health; then break; fi
-          sleep 5
-        done
-        for i in {1..5}; do
-          if curl -sSf $PAYMENT_URL/health; then break; fi
-          sleep 5
-        done
-        for i in {1..5}; do
-          if curl -sSf $RENTAL_URL/health; then break; fi
-          sleep 5
-        done
-        for i in {1..5}; do
-          if curl -sSf $CARS_URL/health; then break; fi
-          sleep 5
-        done
+        echo "Testing service endpoints:"
+        echo "Gateway: $GATEWAY_URL/health"
+        curl -sSf $GATEWAY_URL/health || echo "Gateway health check failed"
+        echo "Payment: $PAYMENT_URL/health"
+        curl -sSf $PAYMENT_URL/health || echo "Payment health check failed"
+        echo "Rental: $RENTAL_URL/health"
+        curl -sSf $RENTAL_URL/health || echo "Rental health check failed"
+        echo "Cars: $CARS_URL/health"
+        curl -sSf $CARS_URL/health || echo "Cars health check failed"
 
     - name: Autograding
       uses: education/autograding@v1
