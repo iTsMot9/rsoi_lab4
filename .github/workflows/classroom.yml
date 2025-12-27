@@ -6,13 +6,6 @@ on:
   pull_request:
     branches:
       - master
-name: GitHub Classroom Workflow
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 jobs:
   build-and-deploy:
