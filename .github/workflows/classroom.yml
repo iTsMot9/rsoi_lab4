@@ -28,7 +28,7 @@ jobs:
         password: ${{ secrets.DOCKER_PASSWORD }}
 
     - name: Set up YC CLI
-      uses: nightstory/yc-setup@v1
+      uses: nightstory/setup-yc@v1
       with:
         yc_version: 'latest'
         yc_token: ${{ secrets.YC_OAUTH_TOKEN }}
