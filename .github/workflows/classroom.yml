@@ -204,7 +204,7 @@ jobs:
         echo "Cars: $CARS_URL/health"
         curl -s -o /dev/null -w "%{http_code}\n" $CARS_URL/health
 
-      - name: Autograding
-        uses: education/autograding@v1
-        continue-on-error: true
+    - name: Autograding
+      uses: education/autograding@v1
+      continue-on-error: true
 
