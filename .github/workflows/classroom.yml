@@ -76,6 +76,16 @@ jobs:
         kubectl config use-context yc-$CLUSTER_NAME
         kubectl cluster-info
 
+    - name: Set up Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: 'v3.12.0'
+
+    - name: Add Helm repositories
+      run: |
+        helm repo add bitnami https://charts.bitnami.com/bitnami
+        helm repo update
+
     - name: Create namespace
       run: |
         kubectl create namespace test --dry-run=client -o yaml | kubectl apply -f -
