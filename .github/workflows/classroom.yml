@@ -23,34 +23,20 @@ jobs:
 
     - name: Configure Yandex Cloud CLI
       run: |
-        # Install YC CLI
         curl https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud
-        
         echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
         export PATH="/home/runner/yandex-cloud/bin:$PATH"
-        
-        # Install jq for JSON processing
         sudo apt-get update
         sudo apt-get install -y jq
-        
-        echo "Verifying YC CLI installation..."
         which yc
         yc --version
-        
         yc config profile create github-actions
-        
         echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > /home/runner/key.json
-        
         yc config set service-account-key /home/runner/key.json
-        
         yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
         yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
-        
-        echo "=== YC Config ==="
         yc config list
-        echo "=== Cloud Info ==="
         yc resource-manager cloud list
-        echo "=== Folder Info ==="
         yc resource-manager folder list
       env:
         YC_SERVICE_ACCOUNT_KEY: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
@@ -59,35 +45,24 @@ jobs:
 
     - name: Login to Yandex Container Registry
       run: |
-        # Configure Docker to use Yandex Container Registry
         yc container registry configure-docker --folder-id ${{ secrets.YC_FOLDER_ID }}
-        
-        echo "Successfully configured Docker for Yandex Container Registry"
 
     - name: Verify Container Registry exists
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
         echo "Checking if registry 'rsoi-registry' exists in folder $FOLDER_ID..."
-        
-        echo "Listing all registries in folder..."
         REGISTRY_LIST=$(yc container registry list --folder-id $FOLDER_ID --format json)
         echo "Available registries:"
         echo "$REGISTRY_LIST" | jq .
-        
         REGISTRY_EXISTS=$(echo "$REGISTRY_LIST" | jq -r '.[] | select(.name == "rsoi-registry") | .id' || echo "")
-        
         if [ -z "$REGISTRY_EXISTS" ]; then
           echo "Registry 'rsoi-registry' not found. Creating it now..."
           yc container registry create --name rsoi-registry --folder-id $FOLDER_ID
           echo "Registry created successfully"
-          
-          echo "Verifying registry creation..."
           yc container registry list --folder-id $FOLDER_ID
         else
           echo "Registry 'rsoi-registry' found with ID: $REGISTRY_EXISTS"
         fi
-        
-        echo "Checking access permissions for registry..."
         yc container registry list-access-bindings rsoi-registry --folder-id $FOLDER_ID || echo "Could not check permissions, but continuing"
 
     - name: Get cluster credentials
@@ -114,55 +89,42 @@ jobs:
     - name: Build and push Docker images
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
-        REGISTRY_URL=cr.yandex/${FOLDER_ID}/rsoi-registry
-        
-        echo "Registry URL: $REGISTRY_URL"
+        REGISTRY_NAME="rsoi-registry"
+        echo "Registry URL: cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}"
         echo "Folder ID: $FOLDER_ID"
-        echo "Full registry path: cr.yandex/$FOLDER_ID/rsoi-registry"
-        
+        echo "Full registry path: cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}"
         echo "Testing registry access with hello-world..."
         docker pull hello-world:latest
-        
-        # Tag with full registry path
-        docker tag hello-world:latest cr.yandex/$FOLDER_ID/rsoi-registry/test:latest
-        
+        docker tag hello-world:latest cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/test:latest
         echo "Pushing test image to registry..."
-        docker push cr.yandex/$FOLDER_ID/rsoi-registry/test:latest || {
+        docker push cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/test:latest || {
           echo "Failed to push test image. Checking registry status..."
           yc container registry list --folder-id $FOLDER_ID
-          yc container registry get rsoi-registry --folder-id $FOLDER_ID || echo "Registry not found or inaccessible"
+          yc container registry get $REGISTRY_NAME --folder-id $FOLDER_ID || echo "Registry not found or inaccessible"
           exit 1
         }
-        
-        docker rmi cr.yandex/$FOLDER_ID/rsoi-registry/test:latest || true
-        
+        docker rmi cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/test:latest || true
         echo "Building and pushing gateway service"
-        docker build -t cr.yandex/$FOLDER_ID/rsoi-registry/gateway:latest ./src/gateway
-        docker push cr.yandex/$FOLDER_ID/rsoi-registry/gateway:latest
-
+        docker build -t cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/gateway:latest ./src/gateway
+        docker push cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/gateway:latest
         echo "Building and pushing payment-service"
-        docker build -t cr.yandex/$FOLDER_ID/rsoi-registry/payment-service:latest ./src/payment-service
-        docker push cr.yandex/$FOLDER_ID/rsoi-registry/payment-service:latest
-
+        docker build -t cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/payment-service:latest ./src/payment-service
+        docker push cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/payment-service:latest
         echo "Building and pushing rental-service"
-        docker build -t cr.yandex/$FOLDER_ID/rsoi-registry/rental-service:latest ./src/rental-service
-        docker push cr.yandex/$FOLDER_ID/rsoi-registry/rental-service:latest
-
+        docker build -t cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/rental-service:latest ./src/rental-service
+        docker push cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/rental-service:latest
         echo "Building and pushing cars-service"
-        docker build -t cr.yandex/$FOLDER_ID/rsoi-registry/cars-service:latest ./src/cars-service
-        docker push cr.yandex/$FOLDER_ID/rsoi-registry/cars-service:latest
+        docker build -t cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/cars-service:latest ./src/cars-service
+        docker push cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/cars-service:latest
 
     - name: Create database initialization resources
       run: |
-        # Create namespace first
         kubectl create namespace rsoi --dry-run=client -o yaml | kubectl apply -f -
-        
         kubectl create secret generic postgres-secrets \
           --from-literal=postgres-password=postgres \
           --from-literal=program-password=test \
           --namespace rsoi \
           --dry-run=client -o yaml | kubectl apply -f -
-
         kubectl create configmap postgres-init-scripts \
           --from-file=./src/schema-3.sql \
           --namespace rsoi \
@@ -191,6 +153,7 @@ jobs:
     - name: Deploy services
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
+        REGISTRY_NAME="rsoi-registry"
         for i in {1..10}; do
           EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
           if [ ! -z "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "<none>" ] && [ "$EXTERNAL_IP" != "null" ]; then
@@ -199,20 +162,16 @@ jobs:
           echo "Waiting for external IP... ($i/10)"
           sleep 10
         done
-        
         if [ -z "$EXTERNAL_IP" ] || [ "$EXTERNAL_IP" = "<none>" ] || [ "$EXTERNAL_IP" = "null" ]; then
           echo "Warning: Could not get external IP after 10 attempts, using placeholder"
           EXTERNAL_IP="127.0.0.1"
         fi
-
         echo "External IP: $EXTERNAL_IP"
-
         kubectl create namespace rsoi --dry-run=client -o yaml | kubectl apply -f -
-
         helm upgrade --install gateway charts/common \
           --namespace rsoi \
           --set service.name=gateway \
-          --set service.image.repository=cr.yandex/${FOLDER_ID}/rsoi-registry/gateway \
+          --set service.image.repository=cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/gateway \
           --set service.image.tag=latest \
           --set service.ports.containerPort=8080 \
           --set service.ports.servicePort=80 \
@@ -225,11 +184,10 @@ jobs:
           --set service.env[2].value=http://payment-service-service.rsoi.svc.cluster.local:80 \
           --set service.env[3].name=PORT \
           --set service.env[3].value=8080
-
         helm upgrade --install payment-service charts/common \
           --namespace rsoi \
           --set service.name=payment-service \
-          --set service.image.repository=cr.yandex/${FOLDER_ID}/rsoi-registry/payment-service \
+          --set service.image.repository=cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/payment-service \
           --set service.image.tag=latest \
           --set service.ports.containerPort=8050 \
           --set service.ports.servicePort=80 \
@@ -238,11 +196,10 @@ jobs:
           --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/payments \
           --set service.env[1].name=PORT \
           --set service.env[1].value=8050
-
         helm upgrade --install rental-service charts/common \
           --namespace rsoi \
           --set service.name=rental-service \
-          --set service.image.repository=cr.yandex/${FOLDER_ID}/rsoi-registry/rental-service \
+          --set service.image.repository=cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/rental-service \
           --set service.image.tag=latest \
           --set service.ports.containerPort=8060 \
           --set service.ports.servicePort=80 \
@@ -255,11 +212,10 @@ jobs:
           --set service.env[2].value=http://payment-service-service.rsoi.svc.cluster.local:80 \
           --set service.env[3].name=PORT \
           --set service.env[3].value=8060
-
         helm upgrade --install cars-service charts/common \
           --namespace rsoi \
           --set service.name=cars-service \
-          --set service.image.repository=cr.yandex/${FOLDER_ID}/rsoi-registry/cars-service \
+          --set service.image.repository=cr.yandex/${FOLDER_ID}/${REGISTRY_NAME}/cars-service \
           --set service.image.tag=latest \
           --set service.ports.containerPort=8070 \
           --set service.ports.servicePort=80 \
@@ -273,17 +229,13 @@ jobs:
       run: |
         echo "=== Checking pods ==="
         kubectl get pods -n rsoi -o wide
-
         echo "=== Checking services ==="
         kubectl get services -n rsoi
-
         echo "=== Checking Ingress ==="
         kubectl get ingress -n rsoi
-
         echo "=== Waiting for services to be ready ==="
         timeout=300
         step=10
-        
         echo "Waiting for gateway pod..."
         for i in $(seq 1 $((timeout/step))); do
           if kubectl get pod -n rsoi -l app=gateway -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
@@ -293,7 +245,6 @@ jobs:
           echo "Waiting for gateway pod to be ready... ($i/$((timeout/step)))"
           sleep $step
         done
-        
         echo "Waiting for payment-service pod..."
         for i in $(seq 1 $((timeout/step))); do
           if kubectl get pod -n rsoi -l app=payment-service -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
@@ -303,7 +254,6 @@ jobs:
           echo "Waiting for payment-service pod to be ready... ($i/$((timeout/step)))"
           sleep $step
         done
-        
         echo "Waiting for rental-service pod..."
         for i in $(seq 1 $((timeout/step))); do
           if kubectl get pod -n rsoi -l app=rental-service -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
@@ -313,7 +263,6 @@ jobs:
           echo "Waiting for rental-service pod to be ready... ($i/$((timeout/step)))"
           sleep $step
         done
-        
         echo "Waiting for cars-service pod..."
         for i in $(seq 1 $((timeout/step))); do
           if kubectl get pod -n rsoi -l app=cars-service -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
@@ -323,24 +272,18 @@ jobs:
           echo "Waiting for cars-service pod to be ready... ($i/$((timeout/step)))"
           sleep $step
         done
-
         EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1")
-        
         GATEWAY_URL="http://gateway.${EXTERNAL_IP}.nip.io"
         PAYMENT_URL="http://payment.${EXTERNAL_IP}.nip.io"
         RENTAL_URL="http://rental.${EXTERNAL_IP}.nip.io"
         CARS_URL="http://cars.${EXTERNAL_IP}.nip.io"
-
         echo "Testing service endpoints:"
         echo "Gateway: $GATEWAY_URL/health"
         curl -s -o /dev/null -w "Gateway health check status: %{http_code}\n" $GATEWAY_URL/health || echo "Gateway health check failed"
-
         echo "Payment: $PAYMENT_URL/health"
         curl -s -o /dev/null -w "Payment health check status: %{http_code}\n" $PAYMENT_URL/health || echo "Payment health check failed"
-
         echo "Rental: $RENTAL_URL/health"
         curl -s -o /dev/null -w "Rental health check status: %{http_code}\n" $RENTAL_URL/health || echo "Rental health check failed"
-
         echo "Cars: $CARS_URL/health"
         curl -s -o /dev/null -w "Cars health check status: %{http_code}\n" $CARS_URL/health || echo "Cars health check failed"
 
