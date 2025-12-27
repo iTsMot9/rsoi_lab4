@@ -58,9 +58,11 @@ jobs:
 
     - name: Login to Yandex Container Registry
       run: |
+        # Configure Docker to use Yandex Container Registry
         yc container registry configure-docker --folder-id ${{ secrets.YC_FOLDER_ID }}
-    
-    echo "Successfully configured Docker for Yandex Container Registry"
+        
+        echo "Successfully configured Docker for Yandex Container Registry"
+
     - name: Verify Container Registry exists
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
@@ -263,6 +265,7 @@ jobs:
         timeout=300
         step=10
         
+        # Wait for gateway
         echo "Waiting for gateway pod..."
         for i in $(seq 1 $((timeout/step))); do
           if kubectl get pod -n rsoi -l app=gateway -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
@@ -273,6 +276,7 @@ jobs:
           sleep $step
         done
         
+        # Wait for payment-service
         echo "Waiting for payment-service pod..."
         for i in $(seq 1 $((timeout/step))); do
           if kubectl get pod -n rsoi -l app=payment-service -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
@@ -283,6 +287,7 @@ jobs:
           sleep $step
         done
         
+        # Wait for rental-service
         echo "Waiting for rental-service pod..."
         for i in $(seq 1 $((timeout/step))); do
           if kubectl get pod -n rsoi -l app=rental-service -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
