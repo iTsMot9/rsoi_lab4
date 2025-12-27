@@ -1,0 +1,101 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: bitnami/postgresql:15
+    container_name: postgres
+    restart: on-failure
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      POSTGRESQL_INITSCRIPTS_DIR: /docker-entrypoint-initdb.d
+    volumes:
+      - db-data:/bitnami/postgresql
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  gateway:
+    build: 
+      context: ./src/gateway
+      dockerfile: Dockerfile
+    image: cr.yandex/<folder-id>/rsoi-registry/gateway:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - CAR_SERVICE_URL=http://cars-service:8070
+      - RENTAL_SERVICE_URL=http://rental-service:8060
+      - PAYMENT_SERVICE_URL=http://payment-service:8050
+      - PORT=8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - rsoi-net
+
+  payment-service:
+    build:
+      context: ./src/payment-service
+      dockerfile: Dockerfile
+    image: cr.yandex/<folder-id>/rsoi-registry/payment-service:latest
+    ports:
+      - "8050:8050"
+    environment:
+      - DATABASE_URL=postgresql://program:test@postgres:5432/payments
+      - PORT=8050
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - rsoi-net
+
+  rental-service:
+    build:
+      context: ./src/rental-service
+      dockerfile: Dockerfile
+    image: cr.yandex/<folder-id>/rsoi-registry/rental-service:latest
+    ports:
+      - "8060:8060"
+    environment:
+      - DATABASE_URL=postgresql://program:test@postgres:5432/rentals
+      - CAR_SERVICE_URL=http://cars-service:8070
+      - PAYMENT_SERVICE_URL=http://payment-service:8050
+      - PORT=8060
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cars-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+    networks:
+      - rsoi-net
+
+  cars-service:
+    build:
+      context: ./src/cars-service
+      dockerfile: Dockerfile
+    image: cr.yandex/<folder-id>/rsoi-registry/cars-service:latest
+    ports:
+      - "8070:8070"
+    environment:
+      - DATABASE_URL=postgresql://program:test@postgres:5432/cars
+      - PORT=8070
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - rsoi-net
+
+volumes:
+  db-data:
+
+networks:
+  rsoi-net:
+    driver: bridge

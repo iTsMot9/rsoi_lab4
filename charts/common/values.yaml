@@ -1,0 +1,34 @@
+service:
+  name: "default-service"
+  replicaCount: 2
+  image:
+    repository: "cr.yandex/<folder-id>/rsoi-registry/default-service"
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  ports:
+    containerPort: 8000  
+    servicePort: 80
+  env: []
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: 8000
+    initialDelaySeconds: 5
+    periodSeconds: 5
+ingress:
+  enabled: true
+  host: "default.<external-ip>.nip.io"
+  path: "/"

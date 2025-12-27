@@ -1,0 +1,16 @@
+service:
+  name: "payment-service"
+  replicaCount: 2
+  image:
+    repository: "cr.yandex/<folder-id>/rsoi-registry/payment-service"
+    tag: "latest"
+  ports:
+    containerPort: 8050
+    servicePort: 80
+  env:
+    - name: DATABASE_URL
+      value: "postgresql://program:test@postgres-postgresql:5432/payments"
+    - name: PORT
+      value: "8050"
+ingress:
+  host: "payment.<external-ip>.nip.io"

@@ -1,0 +1,20 @@
+service:
+  name: "gateway"
+  replicaCount: 2
+  image:
+    repository: "cr.yandex/<folder-id>/rsoi-registry/gateway"
+    tag: "latest"
+  ports:
+    containerPort: 8080
+    servicePort: 80
+  env:
+    - name: CAR_SERVICE_URL
+      value: "http://cars-service-service:80"
+    - name: RENTAL_SERVICE_URL
+      value: "http://rental-service-service:80"
+    - name: PAYMENT_SERVICE_URL
+      value: "http://payment-service-service:80"
+    - name: PORT
+      value: "8080"
+ingress:
+  host: "gateway.<external-ip>.nip.io"

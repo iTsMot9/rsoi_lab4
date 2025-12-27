@@ -1,4 +1,7 @@
 # Created by .ignore support plugin (hsz.mobi)
+postgres-secrets.yaml
+key.txt
+key.json
 ### Node template
 # Logs
 logs
