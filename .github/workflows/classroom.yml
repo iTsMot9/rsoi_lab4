@@ -21,10 +21,6 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Login to Yandex Container Registry
-      run: |
-        yc container registry login --folder-id ${{ secrets.YC_FOLDER_ID }} --docker-password "$(yc iam create-token)"
-
     - name: Configure Yandex Cloud CLI
       run: |
         # Install YC CLI
@@ -32,6 +28,9 @@ jobs:
         
         echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
         export PATH="/home/runner/yandex-cloud/bin:$PATH"
+        
+        sudo apt-get update
+        sudo apt-get install -y jq
         
         echo "Verifying YC CLI installation..."
         which yc
@@ -57,6 +56,13 @@ jobs:
         YC_CLOUD_ID: ${{ secrets.YC_CLOUD_ID }}
         YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
 
+    - name: Login to Yandex Container Registry
+      run: |
+        IAM_TOKEN=$(yc iam create-token)
+        yc container registry login --folder-id ${{ secrets.YC_FOLDER_ID }} --docker-password "$IAM_TOKEN"
+        
+        echo "Successfully logged in to Yandex Container Registry"
+
     - name: Verify Container Registry exists
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
@@ -64,9 +70,10 @@ jobs:
         
         yc container registry list --folder-id $FOLDER_ID
         
-        REGISTRY_ID=$(yc container registry get rsoi-registry --folder-id $FOLDER_ID --format json | jq -r '.id' || echo "")
+        REGISTRY_INFO=$(yc container registry get rsoi-registry --folder-id $FOLDER_ID --format json 2>/dev/null || echo "{}")
+        REGISTRY_ID=$(echo "$REGISTRY_INFO" | jq -r '.id' || echo "")
         
-        if [ -z "$REGISTRY_ID" ] || [ "$REGISTRY_ID" = "null" ]; then
+        if [ -z "$REGISTRY_ID" ] || [ "$REGISTRY_ID" = "null" ] || [ "$REGISTRY_ID" = "" ]; then
           echo "Registry 'rsoi-registry' not found. Creating it now..."
           yc container registry create --name rsoi-registry --folder-id $FOLDER_ID
           echo "Registry created successfully"
@@ -107,7 +114,7 @@ jobs:
         docker pull hello-world:latest
         docker tag hello-world:latest $REGISTRY_URL/test:latest
         docker push $REGISTRY_URL/test:latest
-        docker rmi $REGISTRY_URL/test:latest
+        docker rmi $REGISTRY_URL/test:latest || true
         
         echo "Building and pushing gateway service"
         docker build -t $REGISTRY_URL/gateway:latest ./src/gateway
@@ -130,7 +137,6 @@ jobs:
         # Create namespace first
         kubectl create namespace rsoi --dry-run=client -o yaml | kubectl apply -f -
         
-        # Create secrets for PostgreSQL
         kubectl create secret generic postgres-secrets \
           --from-literal=postgres-password=postgres \
           --from-literal=program-password=test \
@@ -165,6 +171,7 @@ jobs:
     - name: Deploy services
       run: |
         FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
+        # Get external IP with retry logic
         for i in {1..10}; do
           EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
           if [ ! -z "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "<none>" ] && [ "$EXTERNAL_IP" != "null" ]; then
