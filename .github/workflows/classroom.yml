@@ -23,11 +23,11 @@ jobs:
 
     - name: Configure Yandex Cloud CLI
       run: |
-        curl https://storage.yandexcloud.net/yandexcloud-yc/install.sh   | bash -s -- -i /home/runner/yandex-cloud
+        curl https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud
         echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
         export PATH="/home/runner/yandex-cloud/bin:$PATH"
         sudo apt-get update
-        sudo apt-get install -y jq
+        sudo apt-get install -y jq curl
         yc config profile create github-actions
         echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > /home/runner/key.json
         yc config set service-account-key /home/runner/key.json
@@ -90,6 +90,7 @@ jobs:
       run: |
         REGISTRY_ID=${{ steps.verify-registry.outputs.registry_id }}
         echo "Using registry ID: $REGISTRY_ID"
+        
         docker pull hello-world:latest
         docker tag hello-world:latest cr.yandex/$REGISTRY_ID/test:latest
         docker push cr.yandex/$REGISTRY_ID/test:latest
@@ -213,48 +214,90 @@ jobs:
           --set service.env[1].name=PORT \
           --set service.env[1].value=8070
 
-    - name: Verify deployment
-      run: |
-        kubectl get pods -n rsoi -o wide
-        kubectl get svc -n rsoi
-        kubectl get ingress -n rsoi
-        
-        EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1")
-        GATEWAY_URL="http://gateway.${EXTERNAL_IP}.nip.io"
-        PAYMENT_URL="http://payment.${EXTERNAL_IP}.nip.io"
-        RENTAL_URL="http://rental.${EXTERNAL_IP}.nip.io"
-        CARS_URL="http://cars.${EXTERNAL_IP}.nip.io"
-        
-        echo "Testing service endpoints:"
-        echo "Gateway: $GATEWAY_URL/health"
-        curl -sSf $GATEWAY_URL/health || echo "Gateway health check failed"
-        echo "Payment: $PAYMENT_URL/health"
-        curl -sSf $PAYMENT_URL/health || echo "Payment health check failed"
-        echo "Rental: $RENTAL_URL/health"
-        curl -sSf $RENTAL_URL/health || echo "Rental health check failed"
-        echo "Cars: $CARS_URL/health"
-        curl -sSf $CARS_URL/health || echo "Cars health check failed"
-    
     - name: Make test script executable
       run: chmod +x ./scripts/test-script.sh
 
-    - name: Autograding
-      uses: education/autograding@v1
-      continue-on-error: true
-
-    - name: Update Postman environment with gateway URL
+    - name: Run API Tests
+      timeout-minutes: 15
       run: |
-        EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1")
-        GATEWAY_URL="http://gateway.${EXTERNAL_IP}.nip.io"
+        echo "=== Starting comprehensive testing via port-forward ==="
         
-        echo "Gateway URL: $GATEWAY_URL"
+        echo "=== Pod status check ==="
+        kubectl get pods -n rsoi -o wide
         
-        sed -i "s|http://localhost:8080|$GATEWAY_URL|g" v3/postman/environment.json
+        echo "=== Gateway service status ==="
+        kubectl get svc -n rsoi gateway-service || {
+          echo "Gateway service not found!"
+          echo "Available services:"
+          kubectl get svc -n rsoi
+          exit 1
+        }
+        
+        echo "=== Starting port-forward to gateway service ==="
+        kubectl port-forward svc/gateway-service -n rsoi 8080:80 &
+        PORT_FORWARD_PID=$!
+        echo "Port-forward PID: $PORT_FORWARD_PID"
+        
+        echo "=== Waiting for port 8080 to be ready ==="
+        MAX_ATTEMPTS=30
+        for i in $(seq 1 $MAX_ATTEMPTS); do
+          if curl -sSf http://localhost:8080/health >/dev/null 2>&1; then
+            echo "Gateway is ready on localhost:8080"
+            break
+          fi
+          echo "Waiting for gateway... ($i/$MAX_ATTEMPTS)"
+          sleep 2
+          if [ $i -eq $MAX_ATTEMPTS ]; then
+            echo "❌ Gateway not ready after $((MAX_ATTEMPTS*2)) seconds"
+            echo "=== Gateway pod logs ==="
+            kubectl logs -n rsoi -l app=gateway --tail=100 || true
+            echo "=== Database status ==="
+            kubectl get pods -n rsoi -l app=postgres || true
+            echo "=== Service endpoints ==="
+            kubectl describe svc gateway-service -n rsoi || true
+            kill $PORT_FORWARD_PID 2>/dev/null || true
+            exit 1
+          fi
+        done
+        
+        echo "=== Configuring Postman environment for localhost ==="
+        if [ ! -f "v3/postman/environment.json" ]; then
+          echo "❌ environment.json file not found!"
+          echo "Available files:"
+          find v3/postman -type f
+          kill $PORT_FORWARD_PID 2>/dev/null || true
+          exit 1
+        fi
+        
+        cp v3/postman/environment.json v3/postman/environment.json.backup
+        
+        sed -i "s|http://gateway\..*\.nip\.io|http://localhost:8080|g" v3/postman/environment.json
+        sed -i "s|http://localhost:8080|http://localhost:8080|g" v3/postman/environment.json
         
         echo "Updated environment.json:"
         cat v3/postman/environment.json
-
-    - name: Run API Tests
-      timeout-minutes: 5
-      run: ./scripts/test-script.sh v3 kubernetes rsoi
-      continue-on-error: true
+        
+        if grep -q "http://gateway" v3/postman/environment.json; then
+          echo "Warning: gateway URL still found in environment.json"
+          echo "This might cause connection issues"
+        fi
+        
+        echo "=== Running API tests against localhost ==="
+        ./scripts/test-script.sh v3 kubernetes rsoi || {
+          echo "Tests failed!"
+          echo "=== Debugging failed tests ==="
+          echo "Gateway health check:"
+          curl -v http://localhost:8080/health || true
+          echo "Cars endpoint test:"
+          curl -v "http://localhost:8080/api/v1/cars?page=1&size=10&showAll=false" || true
+          echo "Current environment.json:"
+          cat v3/postman/environment.json
+          kill $PORT_FORWARD_PID 2>/dev/null || true
+          exit 1
+        }
+        
+        echo "=== Stopping port-forward ==="
+        kill $PORT_FORWARD_PID 2>/dev/null || true
+        
+        echo "All tests completed successfully!"
+      continue-on-error: false
