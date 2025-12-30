@@ -119,9 +119,8 @@ jobs:
         kubectl delete secret postgres-secrets -n rsoi >/dev/null 2>&1 || true
         
         kubectl create secret generic postgres-secrets \
-          --from-literal=postgresql-postgres-password=postgres \
-          --from-literal=postgresql-password=test \
-          --from-literal=postgresql-username=program \
+          --from-literal=postgres-password=postgres \
+          --from-literal=password=test \
           --namespace rsoi
         
         kubectl delete configmap postgres-init-scripts -n rsoi >/dev/null 2>&1 || true
@@ -173,16 +172,36 @@ jobs:
           fi
         done
         
+        echo "=== Checking PostgreSQL readiness ==="
         for i in {1..60}; do
           if kubectl exec -n rsoi "$POD_NAME" -- pg_isready -U program -d postgres >/dev/null 2>&1; then
-            echo "✅ PostgreSQL is ready for connections"
+            echo "PostgreSQL is ready for connections"
             break
           fi
           echo "Waiting for DB to be ready... ($i/60)"
           sleep 5
           if [ $i -eq 60 ]; then
             echo "❌ PostgreSQL not ready"
+            echo "=== PostgreSQL logs ==="
             kubectl logs -n rsoi "$POD_NAME" --tail=100
+            exit 1
+          fi
+        done
+        
+        echo "=== Checking database initialization ==="
+        for i in {1..30}; do
+          if kubectl exec -n rsoi "$POD_NAME" -- psql -U program -d postgres -c "\l" | grep -q "postgres"; then
+            echo "Database initialized successfully"
+            break
+          fi
+          echo "Waiting for DB init... ($i/30)"
+          sleep 5
+          if [ $i -eq 30 ]; then
+            echo "❌ Database initialization failed"
+            echo "=== PostgreSQL logs ==="
+            kubectl logs -n rsoi "$POD_NAME" --tail=100
+            echo "=== Schema file content ==="
+            kubectl exec -n rsoi "$POD_NAME" -- cat /docker-entrypoint-initdb.d/init-scripts/schema-3.sql || true
             exit 1
           fi
         done
@@ -265,42 +284,72 @@ jobs:
         
         echo "Gateway pod: $GATEWAY_POD"
         
+        # Проверяем статус пода
         POD_STATUS=$(kubectl get pod -n rsoi "$GATEWAY_POD" -o jsonpath='{.status.phase}')
         echo "Gateway pod status: $POD_STATUS"
         
+        # Показываем логи
         kubectl logs -n rsoi "$GATEWAY_POD" --tail=20 || true
         
+        # Запускаем port-forward
         kubectl port-forward -n rsoi "pod/$GATEWAY_POD" 8080:8080 &
         PORT_FORWARD_PID=$!
         echo "Port-forward PID: $PORT_FORWARD_PID"
         
+        # Ждем готовности
+        echo "=== Waiting for gateway to be ready ==="
         for i in {1..20}; do
           if curl -sSf http://localhost:8080/health >/dev/null 2>&1; then
-            echo "✅ Gateway health check passed!"
+            echo "Gateway health check passed!"
             break
           fi
           echo "⏳ Waiting... ($i/20)"
           sleep 3
           if [ $i -eq 20 ]; then
-            echo "❌ Gateway not responding"
+            echo "❌ Gateway not responding after 60 seconds"
+            echo "=== Curl debug output ==="
             curl -v http://localhost:8080/health || true
+            echo "=== Final gateway logs ==="
             kubectl logs -n rsoi "$GATEWAY_POD" --tail=50
             kill $PORT_FORWARD_PID 2>/dev/null || true
             exit 1
           fi
         done
         
+        echo "=== Configuring Postman environment ==="
+        if [ ! -f "v3/postman/environment.json" ]; then
+          echo "❌ environment.json not found!"
+          find . -name "*environment*.json"
+          kill $PORT_FORWARD_PID 2>/dev/null || true
+          exit 1
+        fi
+        
+        cp v3/postman/environment.json v3/postman/environment.json.backup
+        
         sed -i "s|http://gateway\..*\.nip\.io|http://localhost:8080|g" v3/postman/environment.json
         sed -i "s|http://localhost:8080|http://localhost:8080|g" v3/postman/environment.json
         
+        echo "Updated environment.json:"
+        cat v3/postman/environment.json
+        
+        if grep -q "http://gateway" v3/postman/environment.json; then
+          echo "Warning: gateway URL still found in environment.json"
+        fi
+        
+        echo "=== Running API tests ==="
         ./scripts/test-script.sh v3 kubernetes rsoi || {
           echo "❌ Tests failed!"
-          curl -v http://localhost:8080/health
-          curl -v "http://localhost:8080/api/v1/cars?page=1&size=10&showAll=false"
+          echo "=== Debug information ==="
+          echo "Gateway health check:"
+          curl -v http://localhost:8080/health || true
+          echo "Cars endpoint test:"
+          curl -v "http://localhost:8080/api/v1/cars?page=1&size=10&showAll=false" || true
+          echo "Current environment.json:"
+          cat v3/postman/environment.json
           kill $PORT_FORWARD_PID 2>/dev/null || true
           exit 1
         }
         
         kill $PORT_FORWARD_PID 2>/dev/null || true
-        echo "✅ All tests completed successfully!"
+        echo "All tests completed successfully!"
       continue-on-error: false
