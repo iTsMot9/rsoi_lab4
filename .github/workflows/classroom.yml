@@ -23,7 +23,7 @@ jobs:
 
     - name: Configure Yandex Cloud CLI
       run: |
-        curl https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud
+        curl https://storage.yandexcloud.net/yandexcloud-yc/install.sh   | bash -s -- -i /home/runner/yandex-cloud
         echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
         export PATH="/home/runner/yandex-cloud/bin:$PATH"
         sudo apt-get update
@@ -75,7 +75,7 @@ jobs:
 
     - name: Add Helm repositories
       run: |
-        helm repo add bitnami https://charts.bitnami.com/bitnami
+        helm repo add bitnami https://charts.bitnami.com/bitnami  
         helm repo update
 
     - name: Validate Helm charts
@@ -234,9 +234,26 @@ jobs:
         curl -sSf $RENTAL_URL/health || echo "Rental health check failed"
         echo "Cars: $CARS_URL/health"
         curl -sSf $CARS_URL/health || echo "Cars health check failed"
-     
+    
+    - name: Autograding
+      uses: education/autograding@v1
+      continue-on-error: true
+
     - name: Make test script executable
       run: chmod +x ./scripts/test-script.sh
+
+    - name: Update Postman environment with gateway URL
+      run: |
+        EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1")
+        GATEWAY_URL="http://gateway.${EXTERNAL_IP}.nip.io"
+        
+        echo "Gateway URL: $GATEWAY_URL"
+        
+        sed -i "s|http://localhost:8080|$GATEWAY_URL|g" v3/postman/environment.json
+        
+        echo "Updated environment.json:"
+        cat v3/postman/environment.json
+
     - name: Run API Tests
       timeout-minutes: 5
       run: ./scripts/test-script.sh v3 kubernetes rsoi
