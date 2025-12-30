@@ -235,12 +235,12 @@ jobs:
         echo "Cars: $CARS_URL/health"
         curl -sSf $CARS_URL/health || echo "Cars health check failed"
     
+    - name: Make test script executable
+      run: chmod +x ./scripts/test-script.sh
+
     - name: Autograding
       uses: education/autograding@v1
       continue-on-error: true
-
-    - name: Make test script executable
-      run: chmod +x ./scripts/test-script.sh
 
     - name: Update Postman environment with gateway URL
       run: |
