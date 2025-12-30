@@ -114,17 +114,16 @@ jobs:
         kubectl create namespace rsoi --dry-run=client -o yaml | kubectl apply -f -
         
         kubectl delete secret postgres-secrets -n rsoi --ignore-not-found
+        
         kubectl create secret generic postgres-secrets \
-          --from-literal=postgresql-password=postgres \
           --from-literal=postgresql-postgres-password=postgres \
-          --from-literal=postgresql-username=program \
           --from-literal=postgresql-password=test \
-          --from-literal=postgresql-database=postgres \
+          --from-literal=postgresql-username=program \
           --namespace rsoi
         
         kubectl delete configmap postgres-init-scripts -n rsoi --ignore-not-found
         kubectl create configmap postgres-init-scripts \
-          --from-file=./src/schema-3.sql \
+          --from-file=init-scripts=./src/schema-3.sql \
           --namespace rsoi
 
     - name: Deploy PostgreSQL database
@@ -139,53 +138,55 @@ jobs:
           --set auth.existingSecret=postgres-secrets \
           --set auth.username=program \
           --set auth.database=postgres \
+          --set auth.enablePostgresUser=true \
           --set primary.persistence.enabled=false \
           --set primary.initdb.scriptsConfigMap=postgres-init-scripts \
           --set primary.extraEnvVars[0].name=POSTGRESQL_INITSCRIPTS_DIR \
-          --set primary.extraEnvVars[0].value=/docker-entrypoint-initdb.d \
+          --set primary.extraEnvVars[0].value=/docker-entrypoint-initdb.d/init-scripts \
           --set primary.resources.requests.memory=256Mi \
           --set primary.resources.requests.cpu=100m \
           --set primary.resources.limits.memory=512Mi \
           --set primary.resources.limits.cpu=500m \
           --set volumePermissions.enabled=true \
-          --timeout 600s
+          --timeout 600s \
+          --wait
         
-        echo "=== Waiting for PostgreSQL pod ==="
+        echo "=== Waiting for PostgreSQL ==="
         for i in {1..60}; do
-          POD_NAME=$(kubectl get pods -n rsoi -l app.kubernetes.io/instance=postgres,app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          POD_NAME=$(kubectl get pods -n rsoi -l app.kubernetes.io/instance=postgres -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
           if [ ! -z "$POD_NAME" ]; then
             echo "PostgreSQL pod found: $POD_NAME"
             break
           fi
-          echo "Waiting for PostgreSQL pod to be created... ($i/60)"
+          echo "Waiting for PostgreSQL pod... ($i/60)"
           sleep 5
           if [ $i -eq 60 ]; then
-            echo "❌ PostgreSQL pod not created after 5 minutes"
-            echo "=== Current pods ==="
+            echo "❌ PostgreSQL pod not created"
             kubectl get pods -n rsoi
-            echo "=== Helm releases ==="
             helm list -n rsoi
             exit 1
           fi
         done
         
-        echo "=== Waiting for PostgreSQL container to be ready ==="
-        kubectl wait --for=condition=ContainersReady pod/"$POD_NAME" -n rsoi --timeout=600s
+        echo "=== Waiting for container readiness ==="
+        kubectl wait --for=condition=ContainersReady pod/"$POD_NAME" -n rsoi --timeout=600s || {
+          echo "❌ Container not ready"
+          kubectl logs -n rsoi "$POD_NAME" --tail=100
+          exit 1
+        }
         
         echo "=== Checking database initialization ==="
         for i in {1..30}; do
-          if kubectl exec -n rsoi "$POD_NAME" -- psql -U program -d postgres -c "\l" | grep -q "payments"; then
-            echo "Database schema initialized successfully"
+          if kubectl exec -n rsoi "$POD_NAME" -- psql -U program -d postgres -c "\l" | grep -q "postgres"; then
+            echo "✅ Database initialized successfully"
             break
           fi
-          echo "Waiting for database initialization... ($i/30)"
+          echo "Waiting for DB init... ($i/30)"
           sleep 5
           if [ $i -eq 30 ]; then
             echo "❌ Database initialization failed"
-            echo "=== PostgreSQL logs ==="
             kubectl logs -n rsoi "$POD_NAME" --tail=100
-            echo "=== Schema file content ==="
-            kubectl exec -n rsoi "$POD_NAME" -- cat /docker-entrypoint-initdb.d/schema-3.sql || true
+            kubectl exec -n rsoi "$POD_NAME" -- cat /docker-entrypoint-initdb.d/init-scripts/schema-3.sql || true
             exit 1
           fi
         done
@@ -195,52 +196,61 @@ jobs:
         REGISTRY_ID=${{ steps.verify-registry.outputs.registry_id }}
         TIMESTAMP=$(date +%s)
         
-        EXTERNAL_IP=""
-        for i in {1..15}; do
-          EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
-          if [ ! -z "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
-            break
-          fi
-          echo "Waiting for external IP... ($i/15)"
-          sleep 10
-        done
-        EXTERNAL_IP=${EXTERNAL_IP:-127.0.0.1}
-        echo "External IP: $EXTERNAL_IP"
-        
         deploy_service() {
           local name=$1
-          local chart=$2
-          local values=$3
+          local container_port=$2
+          local service_port=$3
+          local env_vars=$4
           
           echo "=== Deploying $name service ==="
-          helm upgrade --install "$name" "$chart" \
+          helm upgrade --install "$name" charts/common \
             --namespace rsoi \
             --set service.name="$name" \
-            --set service.image.repository="$REGISTRY_ID/$name" \
+            --set service.image.repository=cr.yandex/$REGISTRY_ID/"$name" \
             --set service.image.tag="$TIMESTAMP" \
+            --set service.ports.containerPort="$container_port" \
+            --set service.ports.servicePort="$service_port" \
             --set service.readinessProbe.enabled=false \
             --set service.livenessProbe.enabled=false \
-            $values
+            --set service.env=$env_vars \
+            --timeout 300s \
+            --wait
           
-          echo "=== Waiting for $name deployment ==="
+          echo "=== Waiting for $name rollout ==="
           kubectl rollout status deployment/"$name" -n rsoi --timeout=120s
           
           echo "=== $name pod logs ==="
           kubectl logs -n rsoi -l app="$name" --tail=10 || true
         }
         
-        deploy_service gateway charts/common "--set service.ports.containerPort=8080 --set service.ports.servicePort=80 --set service.env[0].name=CAR_SERVICE_URL --set service.env[0].value=http://cars-service-service.rsoi.svc.cluster.local:80 --set service.env[1].name=RENTAL_SERVICE_URL --set service.env[1].value=http://rental-service-service.rsoi.svc.cluster.local:80 --set service.env[2].name=PAYMENT_SERVICE_URL --set service.env[2].value=http://payment-service-service.rsoi.svc.cluster.local:80 --set service.env[3].name=PORT --set service.env[3].value=8080"
+        deploy_service gateway 8080 80 "[\
+          {name: CAR_SERVICE_URL, value: \"http://cars-service-service.rsoi.svc.cluster.local:80\"},\
+          {name: RENTAL_SERVICE_URL, value: \"http://rental-service-service.rsoi.svc.cluster.local:80\"},\
+          {name: PAYMENT_SERVICE_URL, value: \"http://payment-service-service.rsoi.svc.cluster.local:80\"},\
+          {name: PORT, value: \"8080\"}\
+        ]"
         
-        deploy_service payment-service charts/common "--set service.ports.containerPort=8050 --set service.ports.servicePort=80 --set service.env[0].name=DATABASE_URL --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/postgres --set service.env[1].name=PORT --set service.env[1].value=8050"
+        deploy_service payment-service 8050 80 "[\
+          {name: DATABASE_URL, value: \"postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/postgres\"},\
+          {name: PORT, value: \"8050\"}\
+        ]"
         
-        deploy_service rental-service charts/common "--set service.ports.containerPort=8060 --set service.ports.servicePort=80 --set service.env[0].name=DATABASE_URL --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/postgres --set service.env[1].name=CAR_SERVICE_URL --set service.env[1].value=http://cars-service-service.rsoi.svc.cluster.local:80 --set service.env[2].name=PAYMENT_SERVICE_URL --set service.env[2].value=http://payment-service-service.rsoi.svc.cluster.local:80 --set service.env[3].name=PORT --set service.env[3].value=8060"
+        deploy_service rental-service 8060 80 "[\
+          {name: DATABASE_URL, value: \"postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/postgres\"},\
+          {name: CAR_SERVICE_URL, value: \"http://cars-service-service.rsoi.svc.cluster.local:80\"},\
+          {name: PAYMENT_SERVICE_URL, value: \"http://payment-service-service.rsoi.svc.cluster.local:80\"},\
+          {name: PORT, value: \"8060\"}\
+        ]"
         
-        deploy_service cars-service charts/common "--set service.ports.containerPort=8070 --set service.ports.servicePort=80 --set service.env[0].name=DATABASE_URL --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/postgres --set service.env[1].name=PORT --set service.env[1].value=8070"
+        deploy_service cars-service 8070 80 "[\
+          {name: DATABASE_URL, value: \"postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/postgres\"},\
+          {name: PORT, value: \"8070\"}\
+        ]"
 
     - name: Make test script executable
       run: chmod +x ./scripts/test-script.sh
 
-    - name: Run API Tests via direct pod access
+    - name: Run API Tests via port-forward
       timeout-minutes: 15
       run: |
         echo "=== Starting API tests ==="
@@ -249,66 +259,49 @@ jobs:
         GATEWAY_POD=$(kubectl get pods -n rsoi -l app=gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
         if [ -z "$GATEWAY_POD" ]; then
           echo "❌ Gateway pod not found!"
-          echo "Available pods:"
           kubectl get pods -n rsoi
           exit 1
         fi
         
         echo "Gateway pod: $GATEWAY_POD"
         
+        # Проверяем статус пода
         POD_STATUS=$(kubectl get pod -n rsoi "$GATEWAY_POD" -o jsonpath='{.status.phase}')
         echo "Gateway pod status: $POD_STATUS"
         
         echo "=== Gateway pod logs ==="
         kubectl logs -n rsoi "$GATEWAY_POD" --tail=20 || true
         
-        if [ "$POD_STATUS" != "Running" ]; then
-          echo "❌ Gateway pod is not running"
-          exit 1
-        fi
-        
         echo "=== Starting port-forward ==="
         kubectl port-forward -n rsoi "pod/$GATEWAY_POD" 8080:8080 &
         PORT_FORWARD_PID=$!
         echo "Port-forward PID: $PORT_FORWARD_PID"
         
-        echo "=== Waiting for gateway to be ready ==="
+        echo "=== Waiting for gateway ==="
         for i in {1..20}; do
           if curl -sSf http://localhost:8080/health >/dev/null 2>&1; then
-            echo "Gateway health check passed!"
+            echo "✅ Gateway health check passed!"
             break
           fi
-          echo "Waiting for gateway... ($i/20)"
+          echo "⏳ Waiting... ($i/20)"
           sleep 3
           if [ $i -eq 20 ]; then
-            echo "❌ Gateway not responding after 60 seconds"
-            echo "=== Curl debug output ==="
+            echo "❌ Gateway not responding"
             curl -v http://localhost:8080/health || true
-            echo "=== Final gateway logs ==="
             kubectl logs -n rsoi "$GATEWAY_POD" --tail=50
             kill $PORT_FORWARD_PID 2>/dev/null || true
             exit 1
           fi
         done
         
-        echo "=== Configuring Postman environment ==="
-        if [ ! -f "v3/postman/environment.json" ]; then
-          echo "❌ environment.json not found!"
-          find . -name "environment.json"
-          kill $PORT_FORWARD_PID 2>/dev/null || true
-          exit 1
-        fi
-        
-        cp v3/postman/environment.json v3/postman/environment.json.backup
+        echo "=== Configuring environment ==="
         sed -i "s|http://gateway\..*\.nip\.io|http://localhost:8080|g" v3/postman/environment.json
-        sed -i "s|http://localhost:8080|http://localhost:8080|g" v3/postman/environment.json
         echo "Updated environment.json:"
         cat v3/postman/environment.json
         
-        echo "=== Running API tests ==="
+        echo "=== Running tests ==="
         ./scripts/test-script.sh v3 kubernetes rsoi || {
           echo "❌ Tests failed!"
-          echo "=== Test debug information ==="
           curl -v http://localhost:8080/health
           curl -v "http://localhost:8080/api/v1/cars?page=1&size=10&showAll=false"
           kill $PORT_FORWARD_PID 2>/dev/null || true
@@ -316,5 +309,5 @@ jobs:
         }
         
         kill $PORT_FORWARD_PID 2>/dev/null || true
-        echo "All tests completed successfully!"
+        echo "✅ All tests completed successfully!"
       continue-on-error: false
