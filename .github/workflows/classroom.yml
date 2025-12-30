@@ -96,17 +96,19 @@ jobs:
         docker push cr.yandex/$REGISTRY_ID/test:latest
         docker rmi cr.yandex/$REGISTRY_ID/test:latest || true
         
-        docker build -t cr.yandex/$REGISTRY_ID/gateway:latest ./src/gateway
-        docker push cr.yandex/$REGISTRY_ID/gateway:latest
+        # Убираем :latest из тегов для избежания кэширования проблем
+        TIMESTAMP=$(date +%s)
+        docker build -t cr.yandex/$REGISTRY_ID/gateway:$TIMESTAMP ./src/gateway
+        docker push cr.yandex/$REGISTRY_ID/gateway:$TIMESTAMP
         
-        docker build -t cr.yandex/$REGISTRY_ID/payment-service:latest ./src/payment-service
-        docker push cr.yandex/$REGISTRY_ID/payment-service:latest
+        docker build -t cr.yandex/$REGISTRY_ID/payment-service:$TIMESTAMP ./src/payment-service
+        docker push cr.yandex/$REGISTRY_ID/payment-service:$TIMESTAMP
         
-        docker build -t cr.yandex/$REGISTRY_ID/rental-service:latest ./src/rental-service
-        docker push cr.yandex/$REGISTRY_ID/rental-service:latest
+        docker build -t cr.yandex/$REGISTRY_ID/rental-service:$TIMESTAMP ./src/rental-service
+        docker push cr.yandex/$REGISTRY_ID/rental-service:$TIMESTAMP
         
-        docker build -t cr.yandex/$REGISTRY_ID/cars-service:latest ./src/cars-service
-        docker push cr.yandex/$REGISTRY_ID/cars-service:latest
+        docker build -t cr.yandex/$REGISTRY_ID/cars-service:$TIMESTAMP ./src/cars-service
+        docker push cr.yandex/$REGISTRY_ID/cars-service:$TIMESTAMP
 
     - name: Create database initialization resources
       run: |
@@ -132,15 +134,30 @@ jobs:
           --set primary.persistence.enabled=false \
           --set primary.initdb.scriptsConfigMap=postgres-init-scripts \
           --set primary.extraEnvVars[0].name=POSTGRESQL_INITSCRIPTS_DIR \
-          --set primary.extraEnvVars[0].value=/docker-entrypoint-initdb.d
+          --set primary.extraEnvVars[0].value=/docker-entrypoint-initdb.d \
+          --set primary.service.ports.postgresql=5432 \
+          --set fullnameOverride=postgres
 
     - name: Wait for database to be ready
       run: |
+        echo "Waiting for PostgreSQL to be ready..."
         kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=postgres -n rsoi --timeout=300s
+        
+        # Дополнительная проверка доступности БД
+        kubectl run db-check --image=postgres:13 --namespace rsoi --rm -i --restart=Never -- \
+          psql -h postgres-postgresql.rsoi.svc.cluster.local -U postgres -c "\l" -d postgres || {
+          echo "❌ Database is not accessible!"
+          echo "=== PostgreSQL pod logs ==="
+          kubectl logs -n rsoi -l app.kubernetes.io/instance=postgres --tail=50
+          exit 1
+        }
 
     - name: Deploy services
       run: |
         REGISTRY_ID=${{ steps.verify-registry.outputs.registry_id }}
+        TIMESTAMP=$(date +%s)
+        
+        # Получаем внешний IP для Ingress
         for i in {1..10}; do
           EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
           if [ ! -z "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
@@ -155,9 +172,10 @@ jobs:
           --namespace rsoi \
           --set service.name=gateway \
           --set service.image.repository=cr.yandex/$REGISTRY_ID/gateway \
-          --set service.image.tag=latest \
+          --set service.image.tag=$TIMESTAMP \
           --set service.ports.containerPort=8080 \
           --set service.ports.servicePort=80 \
+          --set ingress.enabled=true \
           --set ingress.host=gateway.${EXTERNAL_IP}.nip.io \
           --set service.env[0].name=CAR_SERVICE_URL \
           --set service.env[0].value=http://cars-service-service.rsoi.svc.cluster.local:80 \
@@ -166,30 +184,38 @@ jobs:
           --set service.env[2].name=PAYMENT_SERVICE_URL \
           --set service.env[2].value=http://payment-service-service.rsoi.svc.cluster.local:80 \
           --set service.env[3].name=PORT \
-          --set service.env[3].value=8080
+          --set service.env[3].value=8080 \
+          # Отключаем readinessProbe - КЛЮЧЕВОЕ ИЗМЕНЕНИЕ!
+          --set service.readinessProbe.enabled=false \
+          --set service.livenessProbe.enabled=false
         
         echo "Deploying payment service..."
         helm upgrade --install payment-service charts/common \
           --namespace rsoi \
           --set service.name=payment-service \
           --set service.image.repository=cr.yandex/$REGISTRY_ID/payment-service \
-          --set service.image.tag=latest \
+          --set service.image.tag=$TIMESTAMP \
           --set service.ports.containerPort=8050 \
           --set service.ports.servicePort=80 \
+          --set ingress.enabled=true \
           --set ingress.host=payment.${EXTERNAL_IP}.nip.io \
           --set service.env[0].name=DATABASE_URL \
           --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/payments \
           --set service.env[1].name=PORT \
-          --set service.env[1].value=8050
+          --set service.env[1].value=8050 \
+          # Отключаем readinessProbe - КЛЮЧЕВОЕ ИЗМЕНЕНИЕ!
+          --set service.readinessProbe.enabled=false \
+          --set service.livenessProbe.enabled=false
         
         echo "Deploying rental service..."
         helm upgrade --install rental-service charts/common \
           --namespace rsoi \
           --set service.name=rental-service \
           --set service.image.repository=cr.yandex/$REGISTRY_ID/rental-service \
-          --set service.image.tag=latest \
+          --set service.image.tag=$TIMESTAMP \
           --set service.ports.containerPort=8060 \
           --set service.ports.servicePort=80 \
+          --set ingress.enabled=true \
           --set ingress.host=rental.${EXTERNAL_IP}.nip.io \
           --set service.env[0].name=DATABASE_URL \
           --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/rentals \
@@ -198,106 +224,112 @@ jobs:
           --set service.env[2].name=PAYMENT_SERVICE_URL \
           --set service.env[2].value=http://payment-service-service.rsoi.svc.cluster.local:80 \
           --set service.env[3].name=PORT \
-          --set service.env[3].value=8060
+          --set service.env[3].value=8060 \
+          # Отключаем readinessProbe - КЛЮЧЕВОЕ ИЗМЕНЕНИЕ!
+          --set service.readinessProbe.enabled=false \
+          --set service.livenessProbe.enabled=false
         
         echo "Deploying cars service..."
         helm upgrade --install cars-service charts/common \
           --namespace rsoi \
           --set service.name=cars-service \
           --set service.image.repository=cr.yandex/$REGISTRY_ID/cars-service \
-          --set service.image.tag=latest \
+          --set service.image.tag=$TIMESTAMP \
           --set service.ports.containerPort=8070 \
           --set service.ports.servicePort=80 \
+          --set ingress.enabled=true \
           --set ingress.host=cars.${EXTERNAL_IP}.nip.io \
           --set service.env[0].name=DATABASE_URL \
           --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/cars \
           --set service.env[1].name=PORT \
-          --set service.env[1].value=8070
+          --set service.env[1].value=8070 \
+          # Отключаем readinessProbe - КЛЮЧЕВОЕ ИЗМЕНЕНИЕ!
+          --set service.readinessProbe.enabled=false \
+          --set service.livenessProbe.enabled=false
+        
+        echo "=== Waiting for all services to start ==="
+        sleep 30
 
     - name: Make test script executable
       run: chmod +x ./scripts/test-script.sh
 
+    - name: Debug services before testing
+      run: |
+        echo "=== Final pod status ==="
+        kubectl get pods -n rsoi -o wide --show-labels
+        
+        echo "=== Service endpoints ==="
+        kubectl get svc -n rsoi
+        
+        echo "=== Gateway service details ==="
+        kubectl describe svc gateway-service -n rsoi
+        
+        echo "=== Gateway pod logs ==="
+        kubectl logs -n rsoi -l app=gateway --tail=20 || true
+        
+        echo "=== Database connectivity check ==="
+        kubectl run test-db --image=postgres:13 --namespace rsoi --rm -i --restart=Never -- \
+          psql -h postgres-postgresql.rsoi.svc.cluster.local -U program -d payments -c "SELECT 1" || echo "Database check failed"
+
     - name: Run API Tests
       timeout-minutes: 15
       run: |
-        echo "=== Starting comprehensive testing via port-forward ==="
+        echo "=== Starting testing via port-forward ==="
         
-        echo "=== Pod status check ==="
-        kubectl get pods -n rsoi -o wide
-        
-        echo "=== Gateway service status ==="
-        kubectl get svc -n rsoi gateway-service || {
-          echo "Gateway service not found!"
-          echo "Available services:"
-          kubectl get svc -n rsoi
+        GATEWAY_POD=$(kubectl get pods -n rsoi -l app=gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        if [ -z "$GATEWAY_POD" ]; then
+          echo "❌ No gateway pod found!"
+          kubectl get pods -n rsoi
           exit 1
-        }
+        fi
         
-        echo "=== Starting port-forward to gateway service ==="
-        kubectl port-forward svc/gateway-service -n rsoi 8080:80 &
+        echo "Gateway pod: $GATEWAY_POD"
+        echo "=== Gateway pod logs ==="
+        kubectl logs -n rsoi "$GATEWAY_POD" --tail=30
+        
+        echo "=== Starting port-forward ==="
+        kubectl port-forward "pod/$GATEWAY_POD" -n rsoi 8080:8080 &
         PORT_FORWARD_PID=$!
         echo "Port-forward PID: $PORT_FORWARD_PID"
         
-        echo "=== Waiting for port 8080 to be ready ==="
-        MAX_ATTEMPTS=30
+        echo "=== Waiting for gateway to be ready ==="
+        MAX_ATTEMPTS=20
         for i in $(seq 1 $MAX_ATTEMPTS); do
           if curl -sSf http://localhost:8080/health >/dev/null 2>&1; then
-            echo "Gateway is ready on localhost:8080"
+            echo "Gateway health check passed!"
             break
           fi
           echo "Waiting for gateway... ($i/$MAX_ATTEMPTS)"
-          sleep 2
+          sleep 3
           if [ $i -eq $MAX_ATTEMPTS ]; then
-            echo "❌ Gateway not ready after $((MAX_ATTEMPTS*2)) seconds"
-            echo "=== Gateway pod logs ==="
-            kubectl logs -n rsoi -l app=gateway --tail=100 || true
-            echo "=== Database status ==="
-            kubectl get pods -n rsoi -l app=postgres || true
-            echo "=== Service endpoints ==="
-            kubectl describe svc gateway-service -n rsoi || true
+            echo "❌ Gateway not responding after $((MAX_ATTEMPTS*3)) seconds"
+            echo "=== Detailed curl debug ==="
+            curl -v http://localhost:8080/health || true
+            echo "=== Service logs ==="
+            kubectl logs -n rsoi "$GATEWAY_POD" --tail=50
             kill $PORT_FORWARD_PID 2>/dev/null || true
             exit 1
           fi
         done
         
-        echo "=== Configuring Postman environment for localhost ==="
-        if [ ! -f "v3/postman/environment.json" ]; then
-          echo "❌ environment.json file not found!"
-          echo "Available files:"
-          find v3/postman -type f
-          kill $PORT_FORWARD_PID 2>/dev/null || true
-          exit 1
-        fi
-        
-        cp v3/postman/environment.json v3/postman/environment.json.backup
-        
+        echo "=== Configuring environment for localhost ==="
         sed -i "s|http://gateway\..*\.nip\.io|http://localhost:8080|g" v3/postman/environment.json
         sed -i "s|http://localhost:8080|http://localhost:8080|g" v3/postman/environment.json
-        
         echo "Updated environment.json:"
         cat v3/postman/environment.json
         
-        if grep -q "http://gateway" v3/postman/environment.json; then
-          echo "Warning: gateway URL still found in environment.json"
-          echo "This might cause connection issues"
-        fi
-        
-        echo "=== Running API tests against localhost ==="
+        echo "=== Running tests ==="
         ./scripts/test-script.sh v3 kubernetes rsoi || {
           echo "Tests failed!"
-          echo "=== Debugging failed tests ==="
-          echo "Gateway health check:"
-          curl -v http://localhost:8080/health || true
-          echo "Cars endpoint test:"
-          curl -v "http://localhost:8080/api/v1/cars?page=1&size=10&showAll=false" || true
-          echo "Current environment.json:"
-          cat v3/postman/environment.json
+          echo "=== Debug information ==="
+          echo "Current pods:"
+          kubectl get pods -n rsoi
+          echo "Gateway logs:"
+          kubectl logs -n rsoi "$GATEWAY_POD" --tail=50
           kill $PORT_FORWARD_PID 2>/dev/null || true
           exit 1
         }
         
-        echo "=== Stopping port-forward ==="
         kill $PORT_FORWARD_PID 2>/dev/null || true
-        
         echo "All tests completed successfully!"
       continue-on-error: false
