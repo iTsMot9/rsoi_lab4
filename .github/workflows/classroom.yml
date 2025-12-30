@@ -75,7 +75,7 @@ jobs:
 
     - name: Add Helm repositories
       run: |
-        helm repo add bitnami https://charts.bitnami.com/bitnami  
+        helm repo add bitnami https://charts.bitnami.com/bitnami
         helm repo update
 
     - name: Validate Helm charts
@@ -96,7 +96,6 @@ jobs:
         docker push cr.yandex/$REGISTRY_ID/test:latest
         docker rmi cr.yandex/$REGISTRY_ID/test:latest || true
         
-        # Используем уникальные теги
         TIMESTAMP=$(date +%s)
         docker build -t cr.yandex/$REGISTRY_ID/gateway:$TIMESTAMP ./src/gateway
         docker push cr.yandex/$REGISTRY_ID/gateway:$TIMESTAMP
@@ -116,7 +115,6 @@ jobs:
 
     - name: Create database initialization resources
       run: |
-        # Удаляем существующий секрет если есть
         kubectl delete secret postgres-secrets -n rsoi >/dev/null 2>&1 || true
         
         kubectl create secret generic postgres-secrets \
@@ -134,7 +132,6 @@ jobs:
       run: |
         echo "=== Deploying PostgreSQL ==="
         
-        # Удаляем предыдущую установку если есть
         if helm list -n rsoi | grep -q "postgres"; then
           helm uninstall postgres -n rsoi
         fi
@@ -144,12 +141,13 @@ jobs:
         helm install postgres bitnami/postgresql \
           --namespace rsoi \
           --set global.storageClass=yc-network-ssd \
+          --set global.imageRegistry="" \
+          --set image.repository=bitnamilegacy/postgresql \
+          --set volumePermissions.image.repository=bitnamilegacy/os-shell \
           --set auth.existingSecret=postgres-secrets \
           --set auth.username=program \
           --set auth.database=postgres \
           --set auth.enablePostgresUser=true \
-          --set image.tag=16.3.0-debian-12-r0 \
-          --set volumePermissions.image.tag=12-debian-12-r21 \
           --set primary.persistence.enabled=false \
           --set primary.initdb.scriptsConfigMap=postgres-init-scripts \
           --set primary.extraEnvVars[0].name=POSTGRESQL_INITSCRIPTS_DIR \
@@ -304,7 +302,7 @@ jobs:
           
           for i in {1..30}; do
             if kubectl get pod -n rsoi "$POD" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null | grep -q "true"; then
-              echo "✅ $name container is ready"
+              echo "$name container is ready"
               break
             fi
             echo "Waiting for $name container ready... ($i/30)"
@@ -335,7 +333,6 @@ jobs:
       run: |
         echo "=== Starting API tests ==="
         
-        # Находим gateway под
         GATEWAY_POD=$(kubectl get pods -n rsoi -l app=gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
         if [ -z "$GATEWAY_POD" ]; then
           echo "❌ Gateway pod not found!"
