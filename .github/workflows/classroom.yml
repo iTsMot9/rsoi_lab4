@@ -234,7 +234,9 @@ jobs:
         curl -sSf $RENTAL_URL/health || echo "Rental health check failed"
         echo "Cars: $CARS_URL/health"
         curl -sSf $CARS_URL/health || echo "Cars health check failed"
-      
+     
+    - name: Make test script executable
+      run: chmod +x ./scripts/test-script.sh
     - name: Run API Tests
       timeout-minutes: 5
       run: ./scripts/test-script.sh v3 kubernetes rsoi
