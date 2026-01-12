@@ -41,22 +41,6 @@ jobs:
           pip install -r requirements.txt
           python -m pytest test_main.py
           cd ../..
-        continue-on-error: true
-
-      - uses: docker/setup-buildx-action@v2
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build and push Docker images
-        env:
-          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-        run: |
-          docker compose build --no-cache
-          docker compose push
 
       - name: Install Yandex Cloud CLI
         run: |
@@ -68,6 +52,31 @@ jobs:
           yc config set service-account-key "${{ secrets.YC_SERVICE_ACCOUNT_KEY }}"
           yc config set cloud-id "${{ secrets.YC_CLOUD_ID }}"
           yc config set folder-id "${{ secrets.YC_FOLDER_ID }}"
+
+      - name: Login to Yandex Container Registry
+        run: |
+          yc container registry configure-docker
+          yc container registry get "${{ secrets.YC_FOLDER_ID }}/rsoi-registry" || yc container registry create --name rsoi-registry
+
+      - name: Build and push Docker images
+        env:
+          YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
+        run: |
+          # Build and push car-service
+          docker build -t cr.yandex/${YC_FOLDER_ID}/rsoi-registry/car-service:latest ./src/car-service
+          docker push cr.yandex/${YC_FOLDER_ID}/rsoi-registry/car-service:latest
+          
+          # Build and push gateway
+          docker build -t cr.yandex/${YC_FOLDER_ID}/rsoi-registry/gateway:latest ./src/gateway
+          docker push cr.yandex/${YC_FOLDER_ID}/rsoi-registry/gateway:latest
+          
+          # Build and push payment-service
+          docker build -t cr.yandex/${YC_FOLDER_ID}/rsoi-registry/payment-service:latest ./src/payment-service
+          docker push cr.yandex/${YC_FOLDER_ID}/rsoi-registry/payment-service:latest
+          
+          # Build and push rental-service
+          docker build -t cr.yandex/${YC_FOLDER_ID}/rsoi-registry/rental-service:latest ./src/rental-service
+          docker push cr.yandex/${YC_FOLDER_ID}/rsoi-registry/rental-service:latest
 
       - name: Setup KUBECONFIG
         run: |
@@ -96,7 +105,15 @@ jobs:
           sleep 30
 
       - name: Deploy all microservices
+        env:
+          YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
         run: |
+          # Update image repositories in values.yaml files
+          sed -i "s|repository: .*|repository: cr.yandex/${YC_FOLDER_ID}/rsoi-registry/car-service|" ./charts/apps/car-service/values.yaml
+          sed -i "s|repository: .*|repository: cr.yandex/${YC_FOLDER_ID}/rsoi-registry/gateway|" ./charts/apps/gateway/values.yaml
+          sed -i "s|repository: .*|repository: cr.yandex/${YC_FOLDER_ID}/rsoi-registry/payment-service|" ./charts/apps/payment-service/values.yaml
+          sed -i "s|repository: .*|repository: cr.yandex/${YC_FOLDER_ID}/rsoi-registry/rental-service|" ./charts/apps/rental-service/values.yaml
+          
           helm upgrade --install car-service ./charts/common -f ./charts/apps/car-service/values.yaml -n default
           helm upgrade --install gateway ./charts/common -f ./charts/apps/gateway/values.yaml -n default
           helm upgrade --install payment-service ./charts/common -f ./charts/apps/payment-service/values.yaml -n default
