@@ -1,4 +1,7 @@
 # Created by .ignore support plugin (hsz.mobi)
+cluster-info.txt
+extternal-ip.txt
+
 postgres-secrets.yaml
 key.txt
 key.json

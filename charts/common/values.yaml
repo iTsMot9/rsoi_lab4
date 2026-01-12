@@ -1,22 +1,26 @@
-service:
-  name: "default-service"
-  replicaCount: 2
-  image:
-    repository: "cr.yandex/crpoda1shi1fqfki3em1/default-service"
-    tag: "latest"
-    pullPolicy: IfNotPresent
-  ports:
-    containerPort: 8080
-    servicePort: 80
-  env: []
+replicaCount: 1
+
+image:
+  repository: nginx
+  tag: latest
+  pullPolicy: Always
+
+app:
+  port: 8000
   resources:
     requests:
-      memory: "128Mi"
-      cpu: "100m"
+      memory: 128Mi
+      cpu: 100m
     limits:
-      memory: "256Mi"
-      cpu: "500m"
+      memory: 256Mi
+      cpu: 500m
+
+service:
+  type: ClusterIP
+  port: 80
+
 ingress:
-  enabled: true
-  host: "default.127.0.0.1.nip.io"
-  path: "/"
+  enabled: false
+  annotations: {}
+  ingressClassName: "nginx"
+  hosts: []

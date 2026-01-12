@@ -1,419 +1,143 @@
-name: GitHub Classroom Workflow
+name: Deploy to Kubernetes
+
 on:
   push:
     branches:
+      - main
       - master
   pull_request:
     branches:
+      - main
       - master
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
+    name: Build, Deploy and Test
     runs-on: ubuntu-latest
-    environment: production
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Configure Yandex Cloud CLI
-      run: |
-        curl https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud
-        echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
-        export PATH="/home/runner/yandex-cloud/bin:$PATH"
-        sudo apt-get update
-        sudo apt-get install -y jq curl
-        yc config profile create github-actions
-        echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > /home/runner/key.json
-        yc config set service-account-key /home/runner/key.json
-        yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
-        yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Login to Yandex Container Registry
-      run: |
-        yc container registry configure-docker --folder-id ${{ secrets.YC_FOLDER_ID }}
+      - name: Build and push gateway service
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/gateway-service:${{ github.sha }} ./src/gateway
+          docker push ${{ secrets.DOCKER_USERNAME }}/gateway-service:${{ github.sha }}
 
-    - name: Verify Container Registry exists
-      id: verify-registry
-      run: |
-        FOLDER_ID=${{ secrets.YC_FOLDER_ID }}
-        REGISTRY_NAME="rsoi-registry"
-        echo "Checking if registry '$REGISTRY_NAME' exists in folder $FOLDER_ID..."
-        REGISTRY_INFO=$(yc container registry list --folder-id $FOLDER_ID --format json | jq -r '.[] | select(.name == "'$REGISTRY_NAME'")')
-        if [ -z "$REGISTRY_INFO" ] || [ "$REGISTRY_INFO" == "null" ]; then
-          echo "Registry '$REGISTRY_NAME' not found. Creating it now..."
-          yc container registry create --name $REGISTRY_NAME --folder-id $FOLDER_ID
-          echo "Registry created successfully"
-          REGISTRY_INFO=$(yc container registry list --folder-id $FOLDER_ID --format json | jq -r '.[] | select(.name == "'$REGISTRY_NAME'")')
-        fi
-        REGISTRY_ID=$(echo "$REGISTRY_INFO" | jq -r '.id')
-        echo "Registry ID: $REGISTRY_ID"
-        echo "registry_id=$REGISTRY_ID" >> $GITHUB_OUTPUT
+      - name: Build and push car service
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/car-service:${{ github.sha }} ./src/car-service
+          docker push ${{ secrets.DOCKER_USERNAME }}/car-service:${{ github.sha }}
 
-    - name: Get cluster credentials
-      run: |
-        CLUSTER_NAME="rsoi-lab4-cluster"
-        echo "Getting credentials for cluster: $CLUSTER_NAME"
-        CLUSTER_INFO=$(yc managed-kubernetes cluster list --folder-id ${{ secrets.YC_FOLDER_ID }} --format json | jq -r '.[] | select(.name == "'$CLUSTER_NAME'")')
-        if [ -z "$CLUSTER_INFO" ] || [ "$CLUSTER_INFO" == "null" ]; then
-          echo "Cluster $CLUSTER_NAME not found. Please create it first."
-          exit 1
-        fi
-        yc managed-kubernetes cluster get-credentials $CLUSTER_NAME --external --force
-        kubectl config use-context yc-$CLUSTER_NAME
-        kubectl cluster-info
+      - name: Build and push rental service
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/rental-service:${{ github.sha }} ./src/rental-service
+          docker push ${{ secrets.DOCKER_USERNAME }}/rental-service:${{ github.sha }}
 
-    - name: Set up Helm
-      uses: azure/setup-helm@v4
-      with:
-        version: 'v3.12.0'
+      - name: Build and push payment service
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }} ./src/payment-service
+          docker push ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }}
 
-    - name: Add Helm repositories
-      run: |
-        helm repo add bitnami https://charts.bitnami.com/bitnami
-        helm repo update
+      - name: Set up Kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG }}" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
 
-    - name: Validate Helm charts
-      run: |
-        echo "Validating Helm chart syntax..."
-        helm lint charts/common || {
-          echo "Helm chart validation failed. Check YAML syntax in charts/common/templates/"
-          exit 1
-        }
+      - name: Create namespace
+        run: |
+          kubectl create namespace rsoi-lab4 --dry-run=client -o yaml | kubectl apply -f -
 
-    - name: Build and push Docker images
-      run: |
-        REGISTRY_ID=${{ steps.verify-registry.outputs.registry_id }}
-        echo "Using registry ID: $REGISTRY_ID"
-        
-        docker pull hello-world:latest
-        docker tag hello-world:latest cr.yandex/$REGISTRY_ID/test:latest
-        docker push cr.yandex/$REGISTRY_ID/test:latest
-        docker rmi cr.yandex/$REGISTRY_ID/test:latest || true
-        
-        TIMESTAMP=$(date +%s)
-        docker build -t cr.yandex/$REGISTRY_ID/gateway:$TIMESTAMP ./src/gateway
-        docker push cr.yandex/$REGISTRY_ID/gateway:$TIMESTAMP
-        
-        docker build -t cr.yandex/$REGISTRY_ID/payment-service:$TIMESTAMP ./src/payment-service
-        docker push cr.yandex/$REGISTRY_ID/payment-service:$TIMESTAMP
-        
-        docker build -t cr.yandex/$REGISTRY_ID/rental-service:$TIMESTAMP ./src/rental-service
-        docker push cr.yandex/$REGISTRY_ID/rental-service:$TIMESTAMP
-        
-        docker build -t cr.yandex/$REGISTRY_ID/cars-service:$TIMESTAMP ./src/cars-service
-        docker push cr.yandex/$REGISTRY_ID/cars-service:$TIMESTAMP
+      - name: Deploy PostgreSQL database
+        run: |
+          kubectl apply -f postgres/postgres-configmap.yaml -n rsoi-lab4
+          kubectl apply -f postgres/postgres-pvc.yaml -n rsoi-lab4
+          kubectl apply -f postgres/postgres-deployment.yaml -n rsoi-lab4
+          kubectl apply -f postgres/postgres-service.yaml -n rsoi-lab4
 
-    - name: Create namespace rsoi
-      run: |
-        kubectl create namespace rsoi --dry-run=client -o yaml | kubectl apply -f -
+      - name: Wait for PostgreSQL to be ready
+        run: |
+          kubectl wait -n rsoi-lab4 deployment/postgres --for=condition=Available --timeout=300s
+          sleep 10
 
-    - name: Create database initialization resources
-      run: |
-        kubectl delete secret postgres-secrets -n rsoi >/dev/null 2>&1 || true
-        
-        kubectl create secret generic postgres-secrets \
-          --from-literal=postgres-password=postgres \
-          --from-literal=password=test \
-          --namespace rsoi
-        
-        kubectl delete configmap postgres-init-scripts -n rsoi >/dev/null 2>&1 || true
-        
-        kubectl create configmap postgres-init-scripts \
-          --from-file=init-scripts=./src/schema-3.sql \
-          --namespace rsoi
+      - name: Deploy gateway service
+        run: |
+          helm upgrade --install gateway charts/common \
+            -f charts/apps/gateway/values.yaml \
+            --set image.repository=${{ secrets.DOCKER_USERNAME }}/gateway-service \
+            --set image.tag=${{ github.sha }} \
+            --namespace rsoi-lab4
 
-    - name: Deploy PostgreSQL database
-      run: |
-        echo "=== Deploying PostgreSQL ==="
-        
-        if helm list -n rsoi | grep -q "postgres"; then
-          helm uninstall postgres -n rsoi
-        fi
-        
-        kubectl delete pvc -n rsoi -l app.kubernetes.io/instance=postgres --ignore-not-found
-        
-        helm install postgres bitnami/postgresql \
-          --namespace rsoi \
-          --set global.storageClass=yc-network-ssd \
-          --set global.imageRegistry="" \
-          --set image.repository=bitnamilegacy/postgresql \
-          --set volumePermissions.image.repository=bitnamilegacy/os-shell \
-          --set auth.existingSecret=postgres-secrets \
-          --set auth.username=program \
-          --set auth.database=postgres \
-          --set auth.enablePostgresUser=true \
-          --set primary.persistence.enabled=false \
-          --set primary.initdb.scriptsConfigMap=postgres-init-scripts \
-          --set primary.extraEnvVars[0].name=POSTGRESQL_INITSCRIPTS_DIR \
-          --set primary.extraEnvVars[0].value=/docker-entrypoint-initdb.d/init-scripts \
-          --set primary.resources.requests.memory=512Mi \
-          --set primary.resources.requests.cpu=250m \
-          --set primary.resources.limits.memory=1Gi \
-          --set primary.resources.limits.cpu=1 \
-          --set volumePermissions.enabled=true \
-          --set volumePermissions.resources.requests.memory=128Mi \
-          --set volumePermissions.resources.requests.cpu=50m \
-          --set volumePermissions.resources.limits.memory=256Mi \
-          --set volumePermissions.resources.limits.cpu=100m \
-          --timeout 600s
-        
-        echo "=== Waiting for PostgreSQL service to be created ==="
-        for i in {1..20}; do
-          if kubectl get svc -n rsoi postgres-postgresql >/dev/null 2>&1; then
-            echo "PostgreSQL service created"
-            break
-          fi
-          echo "Waiting for service creation... ($i/20)"
-          sleep 3
-          if [ $i -eq 20 ]; then
-            echo "❌ PostgreSQL service not created"
-            kubectl get all -n rsoi
-            exit 1
-          fi
-        done
-        
-        echo "=== Waiting for PostgreSQL pod ==="
-        POD_NAME=""
-        for i in {1..40}; do
-          POD_NAME=$(kubectl get pods -n rsoi -l app.kubernetes.io/instance=postgres,app.kubernetes.io/name=postgresql,statefulset.kubernetes.io/pod-name=postgres-postgresql-0 -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-          if [ ! -z "$POD_NAME" ]; then
-            echo "PostgreSQL pod found: $POD_NAME"
-            break
-          fi
-          echo "Waiting for PostgreSQL pod... ($i/40)"
-          sleep 5
-          if [ $i -eq 40 ]; then
-            echo "❌ PostgreSQL pod not created after 200 seconds"
-            echo "=== Current pods ==="
-            kubectl get pods -n rsoi -o wide
-            echo "=== Events ==="
-            kubectl get events -n rsoi --sort-by=.metadata.creationTimestamp
-            echo "=== PVC status ==="
-            kubectl get pvc -n rsoi
-            exit 1
-          fi
-        done
-        
-        echo "=== Waiting for pod to be ready ==="
-        kubectl wait --for=condition=ready pod/"$POD_NAME" -n rsoi --timeout=300s || {
-          echo "Pod not ready after 300 seconds"
-          echo "=== Pod describe ==="
-          kubectl describe pod -n rsoi "$POD_NAME"
-          echo "=== Pod logs ==="
-          kubectl logs -n rsoi "$POD_NAME" --previous || true
-          kubectl logs -n rsoi "$POD_NAME"
-          exit 1
-        }
-        
-        echo "=== Check PostgreSQL connection ==="
-        for i in {1..20}; do
-          if kubectl exec -n rsoi "$POD_NAME" -- psql -U program -d postgres -c "SELECT 1" >/dev/null 2>&1; then
-            echo "PostgreSQL connection successful"
-            break
-          fi
-          echo "Waiting for DB connection... ($i/20)"
-          sleep 3
-          if [ $i -eq 20 ]; then
-            echo "❌ Cannot connect to PostgreSQL"
-            echo "=== PostgreSQL logs ==="
-            kubectl logs -n rsoi "$POD_NAME"
-            exit 1
-          fi
-        done
-        
-        echo "PostgreSQL deployment completed successfully"
+      - name: Deploy car service
+        run: |
+          helm upgrade --install car-service charts/common \
+            -f charts/apps/car-service/values.yaml \
+            --set image.repository=${{ secrets.DOCKER_USERNAME }}/car-service \
+            --set image.tag=${{ github.sha }} \
+            --namespace rsoi-lab4
 
-    - name: Deploy services
-      run: |
-        REGISTRY_ID=${{ steps.verify-registry.outputs.registry_id }}
-        TIMESTAMP=$(date +%s)
-        
-        deploy_service() {
-          local name=$1
-          local container_port=$2
-          local service_port=$3
+      - name: Deploy rental service
+        run: |
+          helm upgrade --install rental-service charts/common \
+            -f charts/apps/rental-service/values.yaml \
+            --set image.repository=${{ secrets.DOCKER_USERNAME }}/rental-service \
+            --set image.tag=${{ github.sha }} \
+            --namespace rsoi-lab4
+
+      - name: Deploy payment service
+        run: |
+          helm upgrade --install payment-service charts/common \
+            -f charts/apps/payment-service/values.yaml \
+            --set image.repository=${{ secrets.DOCKER_USERNAME }}/payment-service \
+            --set image.tag=${{ github.sha }} \
+            --namespace rsoi-lab4
+
+      - name: Wait for all services to be ready
+        run: |
+          kubectl wait -n rsoi-lab4 deployment/gateway --for=condition=Available --timeout=120s
+          kubectl wait -n rsoi-lab4 deployment/car-service --for=condition=Available --timeout=120s
+          kubectl wait -n rsoi-lab4 deployment/rental-service --for=condition=Available --timeout=120s
+          kubectl wait -n rsoi-lab4 deployment/payment-service --for=condition=Available --timeout=120s
+          sleep 30
+
+      - name: Check service endpoints
+        run: |
+          echo "=== Checking gateway service ==="
+          kubectl get svc -n rsoi-lab4 gateway
           
-          echo "=== Deploying $name service ==="
+          echo "=== Checking car-service ==="
+          kubectl get svc -n rsoi-lab4 car-service
           
-          if helm list -n rsoi | grep -q "$name"; then
-            helm uninstall "$name" -n rsoi
-          fi
+          echo "=== Checking rental-service ==="
+          kubectl get svc -n rsoi-lab4 rental-service
           
-          case "$name" in
-            gateway)
-              ENV_VARS="--set service.env[0].name=CAR_SERVICE_URL --set service.env[0].value=http://cars-service-service.rsoi.svc.cluster.local:80 \
-                        --set service.env[1].name=RENTAL_SERVICE_URL --set service.env[1].value=http://rental-service-service.rsoi.svc.cluster.local:80 \
-                        --set service.env[2].name=PAYMENT_SERVICE_URL --set service.env[2].value=http://payment-service-service.rsoi.svc.cluster.local:80 \
-                        --set service.env[3].name=PORT --set service.env[3].value=8080"
-              ;;
-            payment-service)
-              ENV_VARS="--set service.env[0].name=DATABASE_URL --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/postgres \
-                        --set service.env[1].name=PORT --set service.env[1].value=8050"
-              ;;
-            rental-service)
-              ENV_VARS="--set service.env[0].name=DATABASE_URL --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/postgres \
-                        --set service.env[1].name=CAR_SERVICE_URL --set service.env[1].value=http://cars-service-service.rsoi.svc.cluster.local:80 \
-                        --set service.env[2].name=PAYMENT_SERVICE_URL --set service.env[2].value=http://payment-service-service.rsoi.svc.cluster.local:80 \
-                        --set service.env[3].name=PORT --set service.env[3].value=8060"
-              ;;
-            cars-service)
-              ENV_VARS="--set service.env[0].name=DATABASE_URL --set service.env[0].value=postgresql://program:test@postgres-postgresql.rsoi.svc.cluster.local:5432/postgres \
-                        --set service.env[1].name=PORT --set service.env[1].value=8070"
-              ;;
-          esac
+          echo "=== Checking payment-service ==="
+          kubectl get svc -n rsoi-lab4 payment-service
           
-          helm install "$name" charts/common \
-            --namespace rsoi \
-            --set service.name="$name" \
-            --set service.image.repository=cr.yandex/$REGISTRY_ID/"$name" \
-            --set service.image.tag="$TIMESTAMP" \
-            --set service.ports.containerPort="$container_port" \
-            --set service.ports.servicePort="$service_port" \
-            --set service.readinessProbe.enabled=false \
-            --set service.livenessProbe.enabled=false \
-            --set resources.requests.memory=256Mi \
-            --set resources.requests.cpu=100m \
-            --set resources.limits.memory=512Mi \
-            --set resources.limits.cpu=500m \
-            $ENV_VARS \
-            --timeout 300s
-          
-          echo "=== Waiting for $name deployment ==="
-          for i in {1..30}; do
-            POD=$(kubectl get pods -n rsoi -l app="$name" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-            if [ ! -z "$POD" ]; then
-              echo "Pod found: $POD"
-              break
-            fi
-            echo "Waiting for $name pod... ($i/30)"
-            sleep 2
-            if [ $i -eq 30 ]; then
-              echo "❌ $name pod not created"
-              kubectl get pods -n rsoi
-              exit 1
-            fi
-          done
-          
-          for i in {1..30}; do
-            if kubectl get pod -n rsoi "$POD" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null | grep -q "true"; then
-              echo "$name container is ready"
-              break
-            fi
-            echo "Waiting for $name container ready... ($i/30)"
-            sleep 2
-            if [ $i -eq 30 ]; then
-              echo "❌ $name container not ready"
-              echo "=== $name pod logs ==="
-              kubectl logs -n rsoi "$POD"
-              echo "=== $name pod describe ==="
-              kubectl describe pod -n rsoi "$POD"
-              exit 1
-            fi
-          done
-          
-          echo "$name deployment completed successfully"
-        }
-        
-        deploy_service gateway 8080 80
-        deploy_service payment-service 8050 80
-        deploy_service rental-service 8060 80
-        deploy_service cars-service 8070 80
+          echo "=== Checking PostgreSQL ==="
+          kubectl get svc -n rsoi-lab4 postgres
 
-    - name: Make test script executable
-      run: chmod +x ./scripts/test-script.sh
+      - name: Run fault tolerance tests
+        run: |
+          ./scripts/test-script.sh v3 gateway rsoi-lab4
+        env:
+          VARIANT: v3
 
-    - name: Run API Tests via port-forward
-      timeout-minutes: 15
-      run: |
-        echo "=== Starting API tests ==="
-        
-        GATEWAY_POD=$(kubectl get pods -n rsoi -l app=gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-        if [ -z "$GATEWAY_POD" ]; then
-          echo "❌ Gateway pod not found!"
-          echo "=== Available pods ==="
-          kubectl get pods -n rsoi -o wide
-          echo "=== Gateway deployment status ==="
-          kubectl get deployment -n rsoi gateway -o wide
-          echo "=== Replicasets ==="
-          kubectl get rs -n rsoi -l app=gateway
-          exit 1
-        fi
-        
-        echo "Gateway pod: $GATEWAY_POD"
-        
-        POD_STATUS=$(kubectl get pod -n rsoi "$GATEWAY_POD" -o jsonpath='{.status.phase}')
-        echo "Gateway pod status: $POD_STATUS"
-        
-        kubectl describe pod -n rsoi "$GATEWAY_POD" || true
-        
-        echo "=== Gateway pod logs ==="
-        kubectl logs -n rsoi "$GATEWAY_POD" --tail=50 || true
-        
-        CONTAINER_READY=$(kubectl get pod -n rsoi "$GATEWAY_POD" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
-        echo "Container ready status: $CONTAINER_READY"
-        
-        if [ "$CONTAINER_READY" != "true" ] || [ "$POD_STATUS" != "Running" ]; then
-          echo "❌ Gateway pod is not ready for testing"
-          echo "=== Pod events ==="
-          kubectl get events -n rsoi --field-selector involvedObject.name="$GATEWAY_POD"
-          exit 1
-        fi
-        
-        echo "=== Starting port-forward ==="
-        kubectl port-forward -n rsoi "pod/$GATEWAY_POD" 8080:8080 &
-        PORT_FORWARD_PID=$!
-        echo "Port-forward PID: $PORT_FORWARD_PID"
-        
-        echo "=== Waiting for gateway to be ready ==="
-        for i in {1..40}; do
-          if curl -sSf http://localhost:8080/health >/dev/null 2>&1; then
-            echo "Gateway health check passed!"
-            break
-          fi
-          echo "⏳ Waiting... ($i/40)"
-          sleep 3
-          if [ $i -eq 40 ]; then
-            echo "❌ Gateway not responding after 120 seconds"
-            echo "=== Curl debug output ==="
-            curl -v http://localhost:8080/health || true
-            echo "=== Final gateway logs ==="
-            kubectl logs -n rsoi "$GATEWAY_POD" --tail=100
-            echo "=== Process list in pod ==="
-            kubectl exec -n rsoi "$GATEWAY_POD" -- ps aux || true
-            kill $PORT_FORWARD_PID 2>/dev/null || true
-            exit 1
-          fi
-        done
-        
-        echo "=== Configuring Postman environment ==="
-        cp v3/postman/environment.json v3/postman/environment.json.backup
-        
-        sed -i "s|http://gateway\..*\.nip\.io|http://localhost:8080|g" v3/postman/environment.json
-        sed -i "s|http://localhost:8080|http://localhost:8080|g" v3/postman/environment.json
-        
-        echo "Updated environment.json:"
-        cat v3/postman/environment.json
-        
-        echo "=== Running API tests ==="
-        ./scripts/test-script.sh v3 kubernetes rsoi || {
-          echo "Tests failed!"
-          echo "=== Debug information ==="
-          echo "Gateway health check:"
-          curl -v http://localhost:8080/health || true
-          echo "Cars endpoint test:"
-          curl -v "http://localhost:8080/api/v1/cars?page=1&size=10&showAll=false" || true
-          echo "Current environment.json:"
-          cat v3/postman/environment.json
-          kill $PORT_FORWARD_PID 2>/dev/null || true
-          exit 1
-        }
-        
-        kill $PORT_FORWARD_PID 2>/dev/null || true
-        echo "All tests completed successfully!"
-      continue-on-error: false
+      - name: Autograding
+        uses: education/autograding@v1
+        continue-on-error: true
+        with:
+          test-script: ./scripts/test-script.sh
+          args: v3 gateway rsoi-lab4

@@ -1,20 +1,31 @@
-{{- if .Values.ingress.enabled }}
+{{- if .Values.ingress.enabled -}}
+{{- $fullName := include "common.fullname" . -}}
+{{- $svcPort := .Values.service.port -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ .Values.service.name }}-ingress
+  name: {{ $fullName }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
+  ingressClassName: {{ .Values.ingress.ingressClassName }}
   rules:
-  - host: {{ .Values.ingress.host }}
+  {{- range .Values.ingress.hosts }}
+  - host: {{ .host | quote }}
     http:
       paths:
-      - path: {{ .Values.ingress.path }}
-        pathType: Prefix
+      {{- range .paths }}
+      - path: {{ .path }}
+        pathType: {{ .pathType }}
         backend:
           service:
-            name: {{ .Values.service.name }}-service
+            name: {{ $fullName }}
             port:
-              number: {{ .Values.service.ports.servicePort }}
+              number: {{ $svcPort }}
+      {{- end }}
+  {{- end }}
 {{- end }}

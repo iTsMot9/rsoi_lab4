@@ -1,1 +1,0 @@
-CREATE USER program WITH PASSWORD 'test' LOGIN;

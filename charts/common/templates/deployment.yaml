@@ -1,39 +1,31 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Values.service.name }}
+  name: {{ include "common.fullname" . }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.service.replicaCount }}
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app: {{ .Values.service.name }}
+      {{- include "common.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app: {{ .Values.service.name }}
+        {{- include "common.selectorLabels" . | nindent 8 }}
     spec:
       containers:
-      - name: {{ .Values.service.name }}
-        image: "{{ .Values.service.image.repository }}:{{ .Values.service.image.tag }}"
-        imagePullPolicy: {{ .Values.service.image.pullPolicy }}
-        ports:
-        - containerPort: {{ .Values.service.ports.containerPort }}
-        env:
-        {{- range .Values.service.env }}
-        - name: {{ .name }}
-          value: {{ .value | quote }}
-        {{- end }}
-        resources:
-          {{- toYaml .Values.service.resources | nindent 10 }}
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: {{ .Values.service.ports.containerPort }}
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: {{ .Values.service.ports.containerPort }}
-          initialDelaySeconds: 5
-          periodSeconds: 5
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.app.port }}
+              protocol: TCP
+          env:
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
