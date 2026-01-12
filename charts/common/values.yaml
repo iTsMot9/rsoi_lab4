@@ -24,3 +24,10 @@ ingress:
   annotations: {}
   ingressClassName: "nginx"
   hosts: []
+  
+livenessProbe:
+  path: "/health"
+  port: 8000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 3

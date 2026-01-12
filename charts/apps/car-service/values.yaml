@@ -38,3 +38,7 @@ env:
   RENTAL_SERVICE_URL: "http://rental-service:8060"
   PAYMENT_SERVICE_URL: "http://payment-service:8050"
   DATABASE_URL: "postgresql://program:test@postgres.rsoi-lab4.svc.cluster.local:5432/cars"
+  
+livenessProbe:
+  port: 8070
+  path: /health
