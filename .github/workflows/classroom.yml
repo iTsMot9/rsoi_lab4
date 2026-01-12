@@ -50,25 +50,28 @@ jobs:
           docker build -t ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }} ./src/payment-service
           docker push ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }}
           
-      - name: Configure Yandex Cloud CLI and Kubeconfig
+      - name: Set up dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Configure Yandex Cloud CLI
+        id: configure-yc
+        uses: yandex-cloud/actions/setup@v1
+        with:
+          yc-service-account-key: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
+          yc-cloud-id: ${{ secrets.YC_CLOUD_ID }}
+          yc-folder-id: ${{ secrets.YC_FOLDER_ID }}
+
+      - name: Login to Yandex Container Registry
+        run: yc container registry configure-docker --folder-id ${{ secrets.YC_FOLDER_ID }}
+
+      - name: Set up Kubeconfig
         run: |
-          curl https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud
-          echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
-          export PATH="/home/runner/yandex-cloud/bin:$PATH"
-    
-          sudo apt-get update
-          sudo apt-get install -y jq
-          yc config profile create github-actions
-          echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > /home/runner/key.json
-          yc config set service-account-key /home/runner/key.json
-          yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
-          yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
-    
-          yc container registry configure-docker --folder-id ${{ secrets.YC_FOLDER_ID }}
-    
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBECONFIG }}" > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
+
+      - name: Create namespace
+        run: |
           kubectl create namespace rsoi-lab4 --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Deploy PostgreSQL database
