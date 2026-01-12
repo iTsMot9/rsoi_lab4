@@ -55,7 +55,7 @@ jobs:
 
       - name: Configure Yandex Cloud CLI
         id: configure-yc
-        uses: yandex-cloud/actions/setup@v1
+        uses: yandex-cloud/cli/setup@v1
         with:
           yc-service-account-key: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
           yc-cloud-id: ${{ secrets.YC_CLOUD_ID }}
