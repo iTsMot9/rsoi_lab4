@@ -50,15 +50,24 @@ jobs:
           docker build -t ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }} ./src/payment-service
           docker push ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }}
           
+      - name: Fix DNS resolution
+        run: |
+          echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
+          echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf > /dev/null
+          sudo systemctl restart systemd-resolved || true
+          nslookup packages.cloud.yandex.net || true
+
       - name: Install Yandex Cloud CLI
         run: |
           sudo apt-get update
           sudo apt-get install -y ca-certificates curl gnupg lsb-release
+          sudo mkdir -p /usr/share/keyrings
           curl -fsSL https://packages.cloud.yandex.net/yandex-cloud-public.key | sudo gpg --dearmor -o /usr/share/keyrings/yandex-cloud.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/yandex-cloud.gpg] https://packages.cloud.yandex.net/yandex-cloud/stable $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/yandex-cloud.list > /dev/null
           sudo apt-get update
           sudo apt-get install -y yandex-cloud-cli
           yc --version
+
 
       - name: Authenticate to Yandex Cloud
         run: |
