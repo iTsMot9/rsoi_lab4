@@ -49,16 +49,19 @@ jobs:
         run: |
           docker build -t ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }} ./src/payment-service
           docker push ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }}
-      - name: Install Yandex Cloud CLI
+          
+      - name: Install yc via package manager
         run: |
-          curl https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -n
-          echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
-
-      - name: Set up Kubeconfig
+    	  curl -sSL https://packages.cloud.yandex.net/yandex-cloud-public.key | sudo apt-key add -
+    	  echo "deb https://packages.cloud.yandex.net/yandex-cloud/stable main" | sudo tee /etc/apt/sources.list.d/yandex-cloud.list
+    	  sudo apt-get update
+    	  sudo apt-get install -y yandex-cloud-cli
+          
+      - name: Authenticate to Yandex Cloud
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBECONFIG }}" > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
+    	  yc config set service-account-key "${{ secrets.YC_SERVICE_ACCOUNT_KEY }}"
+    	  yc config set folder-id "${{ secrets.YC_FOLDER_ID }}"
+    	  yc config set cloud-id "${{ secrets.YC_CLOUD_ID }}"   
           
       - name: Set up Kubeconfig
         run: |
