@@ -43,6 +43,34 @@ jobs:
           cd ../..
         continue-on-error: true
 
+      - uses: docker/setup-buildx-action@v2
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker images
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+        run: |
+          # Build and push car-service
+          docker build -t ${DOCKER_USERNAME}/car-service:latest ./src/car-service
+          docker push ${DOCKER_USERNAME}/car-service:latest
+          
+          # Build and push gateway
+          docker build -t ${DOCKER_USERNAME}/gateway:latest ./src/gateway
+          docker push ${DOCKER_USERNAME}/gateway:latest
+          
+          # Build and push payment-service
+          docker build -t ${DOCKER_USERNAME}/payment-service:latest ./src/payment-service
+          docker push ${DOCKER_USERNAME}/payment-service:latest
+          
+          # Build and push rental-service
+          docker build -t ${DOCKER_USERNAME}/rental-service:latest ./src/rental-service
+          docker push ${DOCKER_USERNAME}/rental-service:latest
+
       - name: Install Yandex Cloud CLI
         run: |
           curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud
@@ -50,34 +78,10 @@ jobs:
 
       - name: Configure Yandex Cloud CLI
         run: |
-          yc config set service-account-key "${{ secrets.YC_SERVICE_ACCOUNT_KEY }}"
+          echo "${{ secrets.YC_SERVICE_ACCOUNT_KEY }}" > /tmp/yc-service-account-key.json
+          yc config set service-account-key /tmp/yc-service-account-key.json
           yc config set cloud-id "${{ secrets.YC_CLOUD_ID }}"
           yc config set folder-id "${{ secrets.YC_FOLDER_ID }}"
-
-      - name: Login to Yandex Container Registry
-        run: |
-          yc container registry configure-docker
-          yc container registry get "${{ secrets.YC_FOLDER_ID }}/rsoi-registry" || yc container registry create --name rsoi-registry
-
-      - name: Build and push Docker images
-        env:
-          YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
-        run: |
-          # Build and push car-service
-          docker build -t cr.yandex/${YC_FOLDER_ID}/rsoi-registry/car-service:latest ./src/car-service
-          docker push cr.yandex/${YC_FOLDER_ID}/rsoi-registry/car-service:latest
-          
-          # Build and push gateway
-          docker build -t cr.yandex/${YC_FOLDER_ID}/rsoi-registry/gateway:latest ./src/gateway
-          docker push cr.yandex/${YC_FOLDER_ID}/rsoi-registry/gateway:latest
-          
-          # Build and push payment-service
-          docker build -t cr.yandex/${YC_FOLDER_ID}/rsoi-registry/payment-service:latest ./src/payment-service
-          docker push cr.yandex/${YC_FOLDER_ID}/rsoi-registry/payment-service:latest
-          
-          # Build and push rental-service
-          docker build -t cr.yandex/${YC_FOLDER_ID}/rsoi-registry/rental-service:latest ./src/rental-service
-          docker push cr.yandex/${YC_FOLDER_ID}/rsoi-registry/rental-service:latest
 
       - name: Setup KUBECONFIG
         run: |
@@ -107,13 +111,13 @@ jobs:
 
       - name: Deploy all microservices
         env:
-          YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
         run: |
           # Update image repositories in values.yaml files
-          sed -i "s|repository: .*|repository: cr.yandex/${YC_FOLDER_ID}/rsoi-registry/car-service|" ./charts/apps/car-service/values.yaml
-          sed -i "s|repository: .*|repository: cr.yandex/${YC_FOLDER_ID}/rsoi-registry/gateway|" ./charts/apps/gateway/values.yaml
-          sed -i "s|repository: .*|repository: cr.yandex/${YC_FOLDER_ID}/rsoi-registry/payment-service|" ./charts/apps/payment-service/values.yaml
-          sed -i "s|repository: .*|repository: cr.yandex/${YC_FOLDER_ID}/rsoi-registry/rental-service|" ./charts/apps/rental-service/values.yaml
+          sed -i "s|repository: .*|repository: ${DOCKER_USERNAME}/car-service|" ./charts/apps/car-service/values.yaml
+          sed -i "s|repository: .*|repository: ${DOCKER_USERNAME}/gateway|" ./charts/apps/gateway/values.yaml
+          sed -i "s|repository: .*|repository: ${DOCKER_USERNAME}/payment-service|" ./charts/apps/payment-service/values.yaml
+          sed -i "s|repository: .*|repository: ${DOCKER_USERNAME}/rental-service|" ./charts/apps/rental-service/values.yaml
           
           helm upgrade --install car-service ./charts/common -f ./charts/apps/car-service/values.yaml -n default
           helm upgrade --install gateway ./charts/common -f ./charts/apps/gateway/values.yaml -n default
