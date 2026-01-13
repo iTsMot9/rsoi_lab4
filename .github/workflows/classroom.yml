@@ -99,9 +99,15 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-      - name: Ensure namespace rsoi-lab4 exists
+      - name: Clean up old ingress resources from default
         run: |
-          kubectl create namespace rsoi-lab4 --dry-run=client -o yaml | kubectl apply -f -
+          kubectl delete ingress gateway car-service payment-service rental-service -n default --ignore-not-found=true
+
+      - name: Clean up rsoi-lab4 namespace
+        run: |
+          kubectl delete namespace rsoi-lab4 --ignore-not-found=true
+          sleep 10
+          kubectl create namespace rsoi-lab4
 
       - name: Deploy PostgreSQL
         run: |
