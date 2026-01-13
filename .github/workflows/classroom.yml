@@ -55,7 +55,6 @@ jobs:
         timeout-minutes: 10
         run: |
           DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }}
-
           docker build -t $DOCKER_USERNAME/car-service:${{ github.sha }} ./src/car-service
           docker push $DOCKER_USERNAME/car-service:${{ github.sha }}
 
@@ -100,9 +99,9 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-      - name: Clean up old ingress resources from default
+      - name: Clean up old resources from default
         run: |
-          kubectl delete ingress gateway gateway-service car-service payment-service rental-service -n default --ignore-not-found=true
+          kubectl delete deployment,service,ingress gateway car-service payment-service rental-service -n default --ignore-not-found=true
 
       - name: Clean up rsoi-lab4 namespace
         run: |
@@ -122,18 +121,6 @@ jobs:
 
       - name: Deploy Microservices via Helm
         run: |
-          # В этом варианте мы НЕ изменяем values.yaml через sed.
-          # Предполагается, что файлы values.yaml в ./charts/apps/* уже содержат правильные имена репозиториев и теги.
-          # Если теги в values.yaml по-прежнему 'latest', их нужно будет обновить вручную или через другой способ.
-          # Допустим, вы также вручную обновили теги в values.yaml на ${{ github.sha }} или placeholder для тега.
-
-          # Если вы используете placeholder для тега (например, tag: <COMMIT_SHA>), тогда:
-          # for service in car-service gateway payment-service rental-service; do
-          #   sed -i "s|tag: <COMMIT_SHA>|tag: ${{ github.sha }}|g" "./charts/apps/$service/values.yaml"
-          # done
-
-          # Если вы НЕ используете placeholder для тега и указали его вручную (например, tag: latest),
-          # то следующий цикл обновит теги на ${{ github.sha }}:
           for service in car-service gateway payment-service rental-service; do
              sed -i "s|tag: latest|tag: ${{ github.sha }}|g" "./charts/apps/$service/values.yaml"
           done
@@ -146,6 +133,9 @@ jobs:
       - name: Wait for services to be ready
         run: |
           kubectl wait -n rsoi-lab4 deployment/gateway deployment/car-service deployment/payment-service deployment/rental-service --for=condition=Available --timeout=5m
+
+      - name: Pause for DNS propagation
+        run: sleep 10
 
       - name: Perform basic health checks
         run: |
