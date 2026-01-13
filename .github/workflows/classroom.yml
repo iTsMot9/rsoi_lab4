@@ -139,7 +139,7 @@ jobs:
 
       - name: Port forward gateway service
         run: |
-          kubectl port-forward service/gateway 8080:8080 -n rsoi-lab4 &
+          kubectl port-forward service/gateway 8080:80 -n rsoi-lab4 &
           sleep 10
           if ! nc -z localhost 8080; then
             echo "Port forwarding failed, port 8080 is not open"
