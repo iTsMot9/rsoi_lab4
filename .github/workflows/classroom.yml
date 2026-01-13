@@ -137,6 +137,9 @@ jobs:
       - name: Pause for DNS propagation
         run: sleep 10
 
+      - name: Make test script executable
+        run: chmod +x ./scripts/test-script.sh
+
       - name: Perform basic health checks
         run: |
           kubectl run --rm -it --restart=Never --image=curlimages/curl:latest health-checker \
