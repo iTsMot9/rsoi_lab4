@@ -39,5 +39,17 @@ env:
   PAYMENT_SERVICE_URL: "http://payment-service:8050"
   
 livenessProbe:
+  path: /manage/health 
   port: 8080
-  path: /health
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /manage/health
+    port: 8080
+  initialDelaySeconds: 20
+  periodSeconds: 5
+  failureThreshold: 3
+  timeoutSeconds: 3

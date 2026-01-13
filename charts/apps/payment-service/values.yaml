@@ -40,5 +40,17 @@ env:
   DATABASE_URL: "postgresql://program:test@postgres.rsoi-lab4.svc.cluster.local:5432/payments"
   
 livenessProbe:
+  path: /manage/health 
   port: 8050
-  path: /health
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /manage/health
+    port: 8050
+  initialDelaySeconds: 20
+  periodSeconds: 5
+  failureThreshold: 3
+  timeoutSeconds: 3
