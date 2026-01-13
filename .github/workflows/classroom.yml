@@ -71,15 +71,13 @@ jobs:
         run: |
           curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud -q
           echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
-          source "/home/runner/.bashrc"
 
       - name: Configure Yandex Cloud CLI
         run: |
           echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > /tmp/yc-sa-key.json
           if ! jq empty /tmp/yc-sa-key.json 2>/dev/null; then
-            echo "Содержимое YC_SERVICE_ACCOUNT_KEY не является допустимым JSON."
-            cat /tmp/yc-sa-key.json # Для отладки, можно удалить
-            exit 1
+              echo "Секрет YC_SERVICE_ACCOUNT_KEY содержит невалидный JSON"
+              exit 1
           fi
           yc config profile create rsoi-lab4
           yc config profiles activate rsoi-lab4
@@ -101,16 +99,19 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
+      - name: Ensure namespace rsoi-lab4 exists
+        run: |
+          kubectl create namespace rsoi-lab4 --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Deploy PostgreSQL
         run: |
-          kubectl create namespace default --dry-run=client -o yaml | kubectl apply -f -
-          kubectl apply -f ./postgres/postgres-pvc.yaml -n default
-          kubectl apply -f ./postgres/postgres-configmap.yaml -n default
-          kubectl apply -f ./postgres/postgres-deployment.yaml -n default
-          kubectl apply -f ./postgres/postgres-service.yaml -n default
+          kubectl apply -f ./postgres/postgres-pvc.yaml -n rsoi-lab4
+          kubectl apply -f ./postgres/postgres-configmap.yaml -n rsoi-lab4
+          kubectl apply -f ./postgres/postgres-deployment.yaml -n rsoi-lab4
+          kubectl apply -f ./postgres/postgres-service.yaml -n rsoi-lab4
 
       - name: Wait for PostgreSQL
-        run: kubectl wait -n default deployment/postgres --for=condition=Available --timeout=5m
+        run: kubectl wait -n rsoi-lab4 deployment/postgres --for=condition=Available --timeout=5m
 
       - name: Deploy Microservices via Helm
         run: |
@@ -120,19 +121,19 @@ jobs:
             sed -i "s|repository: placeholder|$DOCKER_USERNAME/$service|g" "./charts/apps/$service/values.yaml"
           done
 
-          helm upgrade --install car-service ./charts/common -f ./charts/apps/car-service/values.yaml -n default
-          helm upgrade --install gateway ./charts/common -f ./charts/apps/gateway/values.yaml -n default
-          helm upgrade --install payment-service ./charts/common -f ./charts/apps/payment-service/values.yaml -n default
-          helm upgrade --install rental-service ./charts/common -f ./charts/apps/rental-service/values.yaml -n default
+          helm upgrade --install car-service ./charts/common -f ./charts/apps/car-service/values.yaml -n rsoi-lab4 --create-namespace
+          helm upgrade --install gateway ./charts/common -f ./charts/apps/gateway/values.yaml -n rsoi-lab4 --create-namespace
+          helm upgrade --install payment-service ./charts/common -f ./charts/apps/payment-service/values.yaml -n rsoi-lab4 --create-namespace
+          helm upgrade --install rental-service ./charts/common -f ./charts/apps/rental-service/values.yaml -n rsoi-lab4 --create-namespace
 
       - name: Wait for services to be ready
         run: |
-          kubectl wait -n default deployment/gateway deployment/car-service deployment/payment-service deployment/rental-service --for=condition=Available --timeout=5m
+          kubectl wait -n rsoi-lab4 deployment/gateway deployment/car-service deployment/payment-service deployment/rental-service --for=condition=Available --timeout=5m
 
       - name: Perform basic health checks
         run: |
           kubectl run --rm -it --restart=Never --image=curlimages/curl:latest health-checker \
-            --namespace=default \
+            --namespace=rsoi-lab4 \
             --overrides='{"spec":{"hostNetwork": true}}' \
             -- sh -c 'curl -f http://gateway:8080/health || exit 1; curl -f http://car-service:8070/health || exit 1; curl -f http://payment-service:8050/health || exit 1; curl -f http://rental-service:8060/health || exit 1'
 
