@@ -142,7 +142,7 @@ jobs:
           kubectl run --rm -it --restart=Never --image=curlimages/curl:latest health-checker \
             --namespace=rsoi-lab4 \
             --overrides='{"spec":{"hostNetwork": true}}' \
-            -- sh -c 'curl -f http://gateway:8080/health || exit 1; curl -f http://car-service:8070/health || exit 1; curl -f http://payment-service:8050/health || exit 1; curl -f http://rental-service:8060/health || exit 1'
+            -- sh -c 'curl -f http://gateway:8080/manage/health || exit 1; curl -f http://car-service:8070/manage/health || exit 1; curl -f http://payment-service:8050/manage/health || exit 1; curl -f http://rental-service:8060/manage/health || exit 1'
 
       - name: Autograding
         uses: education/autograding@v1
