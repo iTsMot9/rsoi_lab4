@@ -71,6 +71,7 @@ jobs:
         run: |
           curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud -q
           echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
+          source "/home/runner/.bashrc"
 
       - name: Configure Yandex Cloud CLI
         run: |
