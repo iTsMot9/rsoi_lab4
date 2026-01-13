@@ -134,19 +134,25 @@ jobs:
         run: |
           kubectl wait -n rsoi-lab4 deployment/gateway deployment/car-service deployment/payment-service deployment/rental-service --for=condition=Available --timeout=5m
 
-      - name: Pause for DNS propagation
-        run: sleep 10
-
       - name: Make test script executable
         run: chmod +x ./scripts/test-script.sh
 
-      - name: Perform basic health checks
+      - name: Port forward gateway service
         run: |
-          kubectl run --rm -it --restart=Never --image=curlimages/curl:latest health-checker \
-            --namespace=rsoi-lab4 \
-            -- sh -c 'curl -f http://gateway:8080/manage/health || exit 1; curl -f http://car-service:8070/manage/health || exit 1; curl -f http://payment-service:8050/manage/health || exit 1; curl -f http://rental-service:8060/manage/health || exit 1'
-        continue-on-error: true
+          kubectl port-forward service/gateway 8080:8080 -n rsoi-lab4 &
+          sleep 10
+          if ! nc -z localhost 8080; then
+            echo "Port forwarding failed, port 8080 is not open"
+            exit 1
+          fi
+        timeout-minutes: 10
 
       - name: Autograding
         uses: education/autograding@v1
         continue-on-error: true
+
+      - name: Kill port-forward processes
+        run: |
+          pkill -f "kubectl port-forward"
+        continue-on-error: true
+        if: always()
