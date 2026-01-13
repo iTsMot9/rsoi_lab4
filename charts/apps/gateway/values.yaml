@@ -4,7 +4,7 @@ fullnameOverride: gateway
 replicaCount: 2 
 
 image:
-  repository: itsmot9/gateway-service
+  repository: itsmot9/gateway
   tag: latest
   pullPolicy: Always
 
