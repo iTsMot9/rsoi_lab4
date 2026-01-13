@@ -4,12 +4,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import httpx
 from datetime import datetime
-
+import os
 app = FastAPI()
 
-CARS_SERVICE = "http://cars-service:8070"
-RENTAL_SERVICE = "http://rental-service:8060"
-PAYMENT_SERVICE = "http://payment-service:8050"
+CARS_SERVICE = os.environ.get('CARS_SERVICE_URL', 'http://car-service:8070')
+RENTAL_SERVICE = os.environ.get('RENTAL_SERVICE_URL', 'http://rental-service:8060')
+PAYMENT_SERVICE = os.environ.get('PAYMENT_SERVICE_URL', 'http://payment-service:8050')
 
 
 @app.get("/manage/health")
