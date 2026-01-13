@@ -54,17 +54,18 @@ jobs:
       - name: Build and push Docker images
         timeout-minutes: 10
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/car-service:${{ github.sha }} ./src/car-service
-          docker push ${{ secrets.DOCKER_USERNAME }}/car-service:${{ github.sha }}
+          DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }}
+          docker build -t $DOCKER_USERNAME/car-service:${{ github.sha }} ./src/car-service
+          docker push $DOCKER_USERNAME/car-service:${{ github.sha }}
 
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/gateway:${{ github.sha }} ./src/gateway
-          docker push ${{ secrets.DOCKER_USERNAME }}/gateway:${{ github.sha }}
+          docker build -t $DOCKER_USERNAME/gateway:${{ github.sha }} ./src/gateway
+          docker push $DOCKER_USERNAME/gateway:${{ github.sha }}
 
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }} ./src/payment-service
-          docker push ${{ secrets.DOCKER_USERNAME }}/payment-service:${{ github.sha }}
+          docker build -t $DOCKER_USERNAME/payment-service:${{ github.sha }} ./src/payment-service
+          docker push $DOCKER_USERNAME/payment-service:${{ github.sha }}
 
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/rental-service:${{ github.sha }} ./src/rental-service
-          docker push ${{ secrets.DOCKER_USERNAME }}/rental-service:${{ github.sha }}
+          docker build -t $DOCKER_USERNAME/rental-service:${{ github.sha }} ./src/rental-service
+          docker push $DOCKER_USERNAME/rental-service:${{ github.sha }}
 
       - name: Install Yandex Cloud CLI
         run: |
@@ -86,6 +87,7 @@ jobs:
         run: |
           mkdir -p $HOME/.kube
           echo '${{ secrets.KUBECONFIG }}' > $HOME/.kube/config
+          sed -i "s|/home/[^/]\+/yandex-cloud/bin/yc|/home/runner/yandex-cloud/bin/yc|g" $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
       - name: Verify kubectl connection
@@ -108,9 +110,10 @@ jobs:
 
       - name: Deploy Microservices via Helm
         run: |
+          DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }}
           for service in car-service gateway payment-service rental-service; do
             sed -i "s|tag: latest|tag: ${{ github.sha }}|g" "./charts/apps/$service/values.yaml"
-            sed -i "s|repository: placeholder|repository: ${{ secrets.DOCKER_USERNAME }}/$service|g" "./charts/apps/$service/values.yaml"
+            sed -i "s|repository: placeholder|$DOCKER_USERNAME/$service|g" "./charts/apps/$service/values.yaml"
           done
 
           helm upgrade --install car-service ./charts/common -f ./charts/apps/car-service/values.yaml -n default
@@ -132,4 +135,3 @@ jobs:
       - name: Autograding
         uses: education/autograding@v1
         continue-on-error: true
-
