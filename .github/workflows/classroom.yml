@@ -109,6 +109,13 @@ jobs:
           sleep 10
           kubectl create namespace rsoi-lab4
 
+      - name: Delete postgres deployment and pvc for fresh init
+        run: |
+          kubectl delete deployment postgres -n rsoi-lab4 --ignore-not-found
+          kubectl delete pvc postgres-pvc -n rsoi-lab4 --ignore-not-found
+          kubectl delete configmap postgres-init-scripts -n rsoi-lab4 --ignore-not-found
+        continue-on-error: true
+
       - name: Deploy PostgreSQL
         run: |
           kubectl apply -f ./postgres/postgres-pvc.yaml -n rsoi-lab4
