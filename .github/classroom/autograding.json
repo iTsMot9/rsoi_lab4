@@ -3,7 +3,7 @@
     {
       "name": "Run Test Script",
       "setup": "",
-      "run": "./scripts/test-script.sh v3 gateway rsoi-lab4",
+      "run": "./scripts/test-script.sh v3 payment-service rsoi-lab4",
       "input": "",
       "output": "",
       "comparison": "included",
