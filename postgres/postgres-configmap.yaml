@@ -21,7 +21,10 @@ data:
 
     for DB_NAME in cars rentals payments; do
       echo "Configuring database: $DB_NAME"
-      psql -U program -d "$DB_NAME" -f "$SCRIPT_PATH/setup_db.sql"
+      psql --username=postgres --dbname="$DB_NAME" <<-EOSQL
+          ALTER SCHEMA public OWNER TO program;
+          GRANT CREATE ON SCHEMA public TO program;
+      psql -U program -d "$DB_NAME" -f "$SCRIPT_PATH/schema-3.sql"
     done
 
     echo "✅ Database initialization completed successfully!"
@@ -72,12 +75,3 @@ data:
         price INT NOT NULL
     );
 
-  "setup_db.sql": |
-    -- setup_db.sql: Выполняется в контексте целевой БД
-    -- Предоставляем право CREATE на схему public пользователю program
-    GRANT CREATE ON SCHEMA public TO program;
-    -- Проверяем, что пользователь может создавать объекты
-    -- Теперь подключаем и выполняем основной скрипт схемы
-    \i /docker-entrypoint-initdb.d/schema-3.sql
-    -- Логируем успех настройки этой БД
-    SELECT 'Database setup completed for current database.' AS message;
