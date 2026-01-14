@@ -7,36 +7,38 @@ data:
   "10-create-user.sql": |
     CREATE ROLE program WITH PASSWORD 'test';
     ALTER ROLE program WITH LOGIN;
-    
+
   "20-create-databases.sh": |
     #!/usr/bin/env bash
-    set -e
-    
+    set -e # Включаем строгий режим
+
     export VARIANT="v3"
     export SCRIPT_PATH=/docker-entrypoint-initdb.d
     export PGPASSWORD=postgres
-    
+
+    echo "Creating databases..."
     psql --dbname template1 -f "$SCRIPT_PATH/db-$VARIANT.sql"
-    # Исправленные пути: файлы находятся в корне /docker-entrypoint-initdb.d
-    psql -U program -d cars -f "$SCRIPT_PATH/schema-3.sql"
-    psql -U program -d rentals -f "$SCRIPT_PATH/schema-3.sql"
-    psql -U program -d payments -f "$SCRIPT_PATH/schema-3.sql"
-    
+
+    for DB_NAME in cars rentals payments; do
+      echo "Configuring database: $DB_NAME"
+      psql -U program -d "$DB_NAME" -f "$SCRIPT_PATH/setup_db.sql"
+    done
+
     echo "✅ Database initialization completed successfully!"
-    
+
   "db-v3.sql": |
     CREATE DATABASE cars;
     GRANT ALL PRIVILEGES ON DATABASE cars TO program;
-    
+
     CREATE DATABASE rentals;
     GRANT ALL PRIVILEGES ON DATABASE rentals TO program;
-    
+
     CREATE DATABASE payments;
     GRANT ALL PRIVILEGES ON DATABASE payments TO program;
-    
+
   "schema-3.sql": |
     CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-    
+
     CREATE TABLE cars (
         id SERIAL PRIMARY KEY,
         car_uid UUID UNIQUE NOT NULL DEFAULT uuid_generate_v4(),
@@ -48,10 +50,10 @@ data:
         type VARCHAR(20) CHECK (type IN ('SEDAN', 'SUV', 'MINIVAN', 'ROADSTER')),
         availability BOOLEAN NOT NULL
     );
-    
+
     INSERT INTO cars (car_uid, brand, model, registration_number, power, price, type, availability)
     VALUES ('109b42f3-198d-4c89-9276-a7520a7120ab', 'Mercedes Benz', 'GLA 250', 'ЛО777Х799', 249, 3500, 'SEDAN', true);
-    
+
     CREATE TABLE rental (
         id SERIAL PRIMARY KEY,
         rental_uid UUID UNIQUE NOT NULL DEFAULT uuid_generate_v4(),
@@ -62,10 +64,20 @@ data:
         date_to DATE  NOT NULL,
         status VARCHAR(20) NOT NULL CHECK (status IN ('IN_PROGRESS', 'FINISHED', 'CANCELED'))
     );
-    
+
     CREATE TABLE payment (
         id SERIAL PRIMARY KEY,
         payment_uid UUID NOT NULL DEFAULT uuid_generate_v4(),
         status VARCHAR(20) NOT NULL CHECK (status IN ('PAID', 'CANCELED')),
         price INT NOT NULL
     );
+
+  "setup_db.sql": |
+    -- setup_db.sql: Выполняется в контексте целевой БД
+    -- Предоставляем право CREATE на схему public пользователю program
+    GRANT CREATE ON SCHEMA public TO program;
+    -- Проверяем, что пользователь может создавать объекты
+    -- Теперь подключаем и выполняем основной скрипт схемы
+    \i /docker-entrypoint-initdb.d/schema-3.sql
+    -- Логируем успех настройки этой БД
+    SELECT 'Database setup completed for current database.' AS message;
