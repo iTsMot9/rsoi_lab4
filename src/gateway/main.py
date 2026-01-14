@@ -7,9 +7,9 @@ from datetime import datetime
 import os
 app = FastAPI()
 
-CARS_SERVICE = os.environ.get('CAR_SERVICE_URL', 'http://car-service:8070')
-RENTAL_SERVICE = os.environ.get('RENTAL_SERVICE_URL', 'http://rental-service:8060')
-PAYMENT_SERVICE = os.environ.get('PAYMENT_SERVICE_URL', 'http://payment-service:8050')
+CARS_SERVICE = os.environ.get('CAR_SERVICE_URL', 'http://car-service:80')
+RENTAL_SERVICE = os.environ.get('RENTAL_SERVICE_URL', 'http://rental-service:80')
+PAYMENT_SERVICE = os.environ.get('PAYMENT_SERVICE_URL', 'http://payment-service:80')
 
 
 @app.get("/manage/health")

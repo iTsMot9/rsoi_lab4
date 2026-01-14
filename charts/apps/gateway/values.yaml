@@ -34,9 +34,9 @@ ingress:
           pathType: Prefix
 
 env:
-  CAR_SERVICE_URL: "http://car-service:8070"
-  RENTAL_SERVICE_URL: "http://rental-service:8060"
-  PAYMENT_SERVICE_URL: "http://payment-service:8050"
+  CAR_SERVICE_URL: "http://car-service:80"
+  RENTAL_SERVICE_URL: "http://rental-service:80"
+  PAYMENT_SERVICE_URL: "http://payment-service:80"
   
 livenessProbe:
   path: /manage/health 
