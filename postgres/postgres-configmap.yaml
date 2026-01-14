@@ -24,7 +24,7 @@ data:
       psql -U postgres --dbname="$DB_NAME" <<-EOSQL
           ALTER SCHEMA public OWNER TO program;
           GRANT CREATE ON SCHEMA public TO program;
-  EOSQL
+	EOSQL
       psql -U program -d "$DB_NAME" -f "$SCRIPT_PATH/schema-3.sql"
     done
 
@@ -75,3 +75,4 @@ data:
         status VARCHAR(20) NOT NULL CHECK (status IN ('PAID', 'CANCELED')),
         price INT NOT NULL
     );
+
