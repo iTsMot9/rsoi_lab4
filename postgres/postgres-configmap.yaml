@@ -3,7 +3,7 @@ kind: ConfigMap
 metadata:
   name: postgres-init-scripts
   namespace: rsoi-lab4
-data: 
+data:
   "10-create-user.sql": |
     CREATE ROLE program WITH PASSWORD 'test';
     ALTER ROLE program WITH LOGIN;
@@ -21,10 +21,8 @@ data:
 
     for DB_NAME in cars rentals payments; do
       echo "Configuring database: $DB_NAME"
-      psql -U postgres --dbname="$DB_NAME" <<EOSQL
-ALTER SCHEMA public OWNER TO program;
-GRANT CREATE ON SCHEMA public TO program;
-EOSQL
+      psql -U postgres -d "$DB_NAME" -c "ALTER SCHEMA public OWNER TO program;"
+      psql -U postgres -d "$DB_NAME" -c "GRANT CREATE ON SCHEMA public TO program;"
       psql -U program -d "$DB_NAME" -f "$SCRIPT_PATH/schema-3.sql"
     done
 
