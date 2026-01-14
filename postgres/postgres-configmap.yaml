@@ -17,9 +17,10 @@ data:
     export PGPASSWORD=postgres
     
     psql --dbname template1 -f "$SCRIPT_PATH/db-$VARIANT.sql"
-    psql -U program -d cars -f "$SCRIPT_PATH/schemas/schema-3.sql"
-    psql -U program -d rentals -f "$SCRIPT_PATH/schemas/schema-3.sql"
-    psql -U program -d payments -f "$SCRIPT_PATH/schemas/schema-3.sql"
+    # Исправленные пути: файлы находятся в корне /docker-entrypoint-initdb.d
+    psql -U program -d cars -f "$SCRIPT_PATH/schema-3.sql"
+    psql -U program -d rentals -f "$SCRIPT_PATH/schema-3.sql"
+    psql -U program -d payments -f "$SCRIPT_PATH/schema-3.sql"
     
     echo "✅ Database initialization completed successfully!"
     
