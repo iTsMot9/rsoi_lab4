@@ -10,7 +10,7 @@ data:
 
   "20-create-databases.sh": |
     #!/usr/bin/env bash
-    set -e # Включаем строгий режим
+    set -e
 
     export VARIANT="v3"
     export SCRIPT_PATH=/docker-entrypoint-initdb.d
@@ -21,9 +21,10 @@ data:
 
     for DB_NAME in cars rentals payments; do
       echo "Configuring database: $DB_NAME"
-      psql --username=postgres --dbname="$DB_NAME" <<-EOSQL
+      psql -U postgres --dbname="$DB_NAME" <<-EOSQL
           ALTER SCHEMA public OWNER TO program;
           GRANT CREATE ON SCHEMA public TO program;
+  EOSQL
       psql -U program -d "$DB_NAME" -f "$SCRIPT_PATH/schema-3.sql"
     done
 
@@ -74,4 +75,3 @@ data:
         status VARCHAR(20) NOT NULL CHECK (status IN ('PAID', 'CANCELED')),
         price INT NOT NULL
     );
-
