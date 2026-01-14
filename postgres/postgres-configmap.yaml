@@ -25,7 +25,7 @@ data:
       psql -U postgres -d "$DB_NAME" -c "GRANT CREATE ON SCHEMA public TO program;"
       psql -U program -d "$DB_NAME" -f "$SCRIPT_PATH/schema-3.sql"
     done
-
+    touch /docker-entrypoint-initdb.d/.docker_initdb_done
     echo "✅ Database initialization completed successfully!"
 
   "db-v3.sql": |
